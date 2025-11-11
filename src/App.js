@@ -1,544 +1,772 @@
 // src/App.js
 import React, { useEffect, useRef, useState } from "react";
+import { auth, db, provider } from "./firebase";
 import {
   signInWithPopup,
   onAuthStateChanged,
   signOut,
+  updateProfile,
 } from "firebase/auth";
 import {
-  ref as dbRef,
+  ref,
   onValue,
-  set,
   push,
-  update,
+  set as dbSet,
   off,
+  update as dbUpdate,
 } from "firebase/database";
-import { auth, db, provider } from "./firebase";
 
-/* ---------------------------
-  Single-file WhatsApp-like chat app (no external libs)
-  - Friend-to-friend chat (Firebase Realtime DB)
-  - HA Chat bot (id: "ha_bot") replies to text & voice->text
-  - Voice-to-text using browser SpeechRecognition (no audio files)
-  - Emoji picker (native)
-  - Image attach as base64 (stored in DB, no Firebase Storage required)
-  - Message edit, delete (soft delete), reactions
-  - Typing indicator, delivered/read marking
-  - Inline responsive styles, logo + "Let's Chat" on login
----------------------------- */
-
-const EMOJI_LIST = [
-  "😀","😁","😂","🤣","😃","😄","😅","😆","😉","😊",
-  "😇","🙂","🙃","😋","😎","😍","😘","🤔","🤨","😐",
-  "😴","😪","😢","😭","😠","😡","🤯","🤗","🤝","👍",
-  "👎","🙏","✨","🔥","💯","❤️","💙","💚","💛","🧡",
-  "🎉","🎁","📷","🎧","🗺️"
-];
-
-const nowTs = () => Date.now();
-const fmtTime = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-
-/* Simple HA reply rules */
-function haReplyFor(text) {
-  if (!text) return "I didn't catch that — can you repeat?";
-  const t = text.toLowerCase();
-  if (/\b(hi|hello|hey)\b/.test(t)) return "Hey! What's up?";
-  if (/\b(how are you|how r you)\b/.test(t)) return "I'm just code but feeling great — you?";
-  if (/\b(date|today)\b/.test(t)) return `Today is ${new Date().toLocaleDateString()}.`;
-  // simple math detection like "what's 3 + 2" or "3+2"
-  const mathMatch = t.match(/(-?\d+)\s*([+\-x*\/])\s*(-?\d+)/);
-  if (mathMatch) {
-    const a = Number(mathMatch[1]);
-    let op = mathMatch[2].replace("x", "*");
-    const b = Number(mathMatch[3]);
-    try {
-      // eslint-disable-next-line no-eval
-      const res = eval(`${a}${op}${b}`);
-      return `Answer: ${res}`;
-    } catch (e) {
-      return "I couldn't calculate that.";
-    }
-  }
-  if (t.includes("color of the sky") || t.includes("colour of the sky")) return "Usually blue 🙂";
-  if (t.length < 20) return "Nice! Tell me more.";
-  return "Thanks — got it. Anything else?";
-}
+/*
+  WhatsApp-style single-file App.js
+  - Contacts-first view
+  - Click contact -> opens chat (contacts hidden)
+  - Back button to go back to contacts
+  - Firebase realtime messages (friends-to-friends)
+  - Lightweight emoji picker (no external libs)
+  - Voice-to-text for message input (Web Speech API)
+  - Inline styles only (responsive)
+*/
 
 export default function App() {
-  // auth + presence + UI state
+  // Auth & user
   const [user, setUser] = useState(null);
-  const [contacts, setContacts] = useState([]); // other users + HA bot
+
+  // Contacts and selection
+  const [contacts, setContacts] = useState([]); // list of { id, name, photo, online, about }
   const [selectedContact, setSelectedContact] = useState(null);
+
+  // Messages in current chat (array)
   const [messages, setMessages] = useState([]);
+  const messagesRefHandle = useRef(null);
+
+  // Composer
   const [text, setText] = useState("");
-  const [typingStatus, setTypingStatus] = useState("");
-  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [showEmoji, setShowEmoji] = useState(false);
   const [listening, setListening] = useState(false);
-  const [sidebarVisible, setSidebarVisible] = useState(true);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [theme, setTheme] = useState("dark"); // can be toggled
-  const [fileInputKey, setFileInputKey] = useState(Date.now()); // to reset file input after use
 
-  const messagesRefActive = useRef(null);
-  const typingRefActive = useRef(null);
+  // UI state: showContacts true => show contacts screen; false => show chat screen
+  const [showContacts, setShowContacts] = useState(true);
+
+  // refs
   const messagesEndRef = useRef(null);
-  const recognitionRef = useRef(null);
+  const speechRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
 
-  // Authentication & load contacts
+  // tiny emoji list (expand as you like)
+  const EMOJIS = [
+    "😀","😁","😂","🤣","😅","😊","😉","😍","😘","🤔",
+    "🙃","😇","🤩","🤗","😎","😴","😢","😭","😡","👍",
+    "👎","🙏","👏","🤝","🔥","✨","🎉","❤️","🧡","💚"
+  ];
+
+  // -------------------- AUTH --------------------
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (current) => {
-      if (current) {
-        setUser(current);
-
-        // write presence
-        const myRef = dbRef(db, `users/${current.uid}`);
-        set(myRef, {
-          name: current.displayName || "Unknown",
-          photo: current.photoURL || "",
-          email: current.email || "",
-          online: true,
-          lastSeen: nowTs(),
-        });
-
-        // subscribe contact list
-        const usersRef = dbRef(db, "users");
-        onValue(usersRef, (snap) => {
-          const raw = snap.val() || {};
-          const arr = Object.keys(raw).map((k) => ({ id: k, ...raw[k] }));
-          // Ensure HA bot exists in UI (not persisted necessarily)
-          const haBot = { id: "ha_bot", name: "HA Chat", photo: `https://api.dicebear.com/6.x/identicon/svg?seed=HAChat`, isBot: true, online: true };
-          const merged = arr.some(a => a.id === "ha_bot") ? arr : [haBot, ...arr];
-          const filtered = merged.filter((u) => u.id !== current.uid);
-          setContacts(filtered);
-        });
+    const unsub = onAuthStateChanged(auth, (u) => {
+      if (u) {
+        setUser(u);
+        subscribeContacts();
       } else {
         setUser(null);
         setContacts([]);
         setSelectedContact(null);
+        cleanupMessagesListener();
       }
     });
     return () => unsub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Responsive sidebar auto-hide for small screens
-  useEffect(() => {
-    function onResize() {
-      if (window.innerWidth < 800) setSidebarVisible(false);
-      else setSidebarVisible(true);
-    }
-    onResize();
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  // Scroll when messages change
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
-
-  // Select a contact/chat and subscribe to messages + typing
-  function openChat(contact) {
-    if (!user) return;
-    setSelectedContact(contact);
-    if (window.innerWidth < 800) setSidebarVisible(false);
-
-    // detach prior
-    if (messagesRefActive.current) off(messagesRefActive.current);
-    if (typingRefActive.current) off(typingRefActive.current);
-
-    const chatId = makeChatId(user.uid, contact.id);
-    const msgsRef = dbRef(db, `chats/${chatId}/messages`);
-    messagesRefActive.current = msgsRef;
-    onValue(msgsRef, (snap) => {
-      const v = snap.val() || {};
-      const arr = Object.entries(v).map(([k, val]) => ({ id: k, ...val }));
-      arr.sort((a,b) => (a.timestamp||0) - (b.timestamp||0));
-      setMessages(arr);
-
-      // Mark delivered for others' messages (simple heuristic)
-      arr.forEach(m => {
-        if (m.sender !== user.uid && !m.delivered) {
-          update(dbRef(db, `chats/${chatId}/messages/${m.id}`), { delivered: true }).catch(() => {});
-        }
-      });
-    });
-
-    // typing indicator path
-    const tRef = dbRef(db, `chats/${chatId}/typing`);
-    typingRefActive.current = tRef;
-    onValue(tRef, (snap) => {
-      const val = snap.val() || {};
-      const keys = Object.keys(val).filter(k => k !== user.uid && val[k]?.typing);
-      if (keys.length) {
-        const name = val[keys[0]]?.name || "typing";
-        setTypingStatus(`${name} is typing...`);
-      } else setTypingStatus("");
-    });
-  }
-
-  function makeChatId(a, b) {
-    if (!a || !b) return null;
-    return a > b ? `${a}_${b}` : `${b}_${a}`;
-  }
-
-  // Typing updater (avoid naming collision)
-  function updateTypingStatus(status) {
-    if (!selectedContact || !user) return;
-    const id = makeChatId(user.uid, selectedContact.id);
-    if (!id) return;
-    const tRef = dbRef(db, `chats/${id}/typing/${user.uid}`);
-    set(tRef, { typing: status, name: user.displayName });
-  }
-
-  // Send text message
-  async function sendTextMessage(body) {
-    if (!user || !selectedContact) return;
-    const content = (body ?? text ?? "").trim();
-    if (!content) return;
-    const id = makeChatId(user.uid, selectedContact.id);
-    const msgs = dbRef(db, `chats/${id}/messages`);
-    const p = push(msgs);
-    await set(p, {
-      sender: user.uid,
-      name: user.displayName,
-      text: content,
-      type: "text",
-      timestamp: nowTs(),
-      delivered: false,
-      read: false,
-      edited: false,
-      deleted: false,
-      reactions: {}
-    });
-    setText("");
-    updateTypingStatus(false);
-
-    // If chatting with HA bot, make a reply (write into same chat)
-    if (selectedContact.id === "ha_bot") {
-      const reply = haReplyFor(content);
-      setTimeout(async () => {
-        const r = push(msgs);
-        await set(r, {
-          sender: "ha_bot",
-          name: "HA Chat",
-          text: reply,
-          type: "text",
-          timestamp: nowTs(),
-          delivered: true,
-          read: true
-        });
-      }, 600);
-    }
-  }
-
-  // Handle enter key
-  function onMessageKeyDown(e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendTextMessage();
-    }
-  }
-
-  // Voice-to-text (SpeechRecognition)
-  function startVoiceToText() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert("Voice recognition not supported in this browser (Chrome recommended).");
-      return;
-    }
-
-    // If already active, stop
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch {}
-      recognitionRef.current = null;
-      setListening(false);
-      return;
-    }
-
-    const rec = new SpeechRecognition();
-    rec.lang = "en-US";
-    rec.interimResults = false;
-    rec.maxAlternatives = 1;
-    rec.onstart = () => setListening(true);
-    rec.onend = () => { setListening(false); recognitionRef.current = null; };
-    rec.onerror = (e) => {
-      console.error("SpeechRecognition error", e);
-      setListening(false);
-      recognitionRef.current = null;
-    };
-    rec.onresult = (ev) => {
-      try {
-        const transcript = ev.results[0][0].transcript;
-        // Send transcript as message immediately (so voice->text becomes chat content)
-        // Append if there is existing text
-        const composed = text ? `${text} ${transcript}` : transcript;
-        setText(composed);
-        // auto-send
-        sendTextMessage(composed);
-        // Clear interim text after sending
-        setText("");
-      } catch (err) { console.error(err); }
-    };
-    recognitionRef.current = rec;
-    rec.start();
-  }
-
-  // Attach an image and store as base64 data URL in DB (no Storage)
-  function handleImageFile(e) {
-    const file = e.target.files?.[0];
-    if (!file || !selectedContact || !user) { e.target.value = ""; setFileInputKey(Date.now()); return; }
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const dataUrl = reader.result;
-      const id = makeChatId(user.uid, selectedContact.id);
-      const msgs = dbRef(db, `chats/${id}/messages`);
-      const p = push(msgs);
-      await set(p, {
-        sender: user.uid,
-        name: user.displayName,
-        text: file.name,
-        type: "image",
-        url: dataUrl,
-        timestamp: nowTs(),
-        delivered: false,
-        read: false,
-        deleted: false,
-        reactions: {}
-      });
-    };
-    reader.readAsDataURL(file);
-    e.target.value = "";
-    setFileInputKey(Date.now());
-  }
-
-  // Edit / Delete message (soft delete)
-  async function editMessage(msg) {
-    if (!user || !selectedContact) return;
-    if (msg.sender !== user.uid) return alert("You can only edit your own messages.");
-    const newText = window.prompt("Edit message:", msg.text);
-    if (newText == null) return;
-    const id = makeChatId(user.uid, selectedContact.id);
-    await update(dbRef(db, `chats/${id}/messages/${msg.id}`), { text: newText, edited: true });
-  }
-  async function deleteMessage(msg) {
-    if (!user || !selectedContact) return;
-    if (!window.confirm("Delete this message for everyone?")) return;
-    const id = makeChatId(user.uid, selectedContact.id);
-    await update(dbRef(db, `chats/${id}/messages/${msg.id}`), { text: "Message deleted", deleted: true });
-  }
-
-  // Reaction toggle
-  async function toggleReaction(msg, emoji) {
-    if (!user || !selectedContact) return;
-    const id = makeChatId(user.uid, selectedContact.id);
-    const mRef = dbRef(db, `chats/${id}/messages/${msg.id}`);
-    // read current snapshot once
-    const current = (await new Promise(res => onValue(mRef, snap => res(snap.val()), { onlyOnce: true }))) || {};
-    const reactions = current.reactions || {};
-    const arr = reactions[emoji] || [];
-    const has = arr.includes(user.uid);
-    const next = has ? arr.filter(x => x !== user.uid) : [...arr, user.uid];
-    const nextReacts = { ...reactions, [emoji]: next.length ? next : undefined };
-    await update(mRef, { reactions: nextReacts });
-  }
-
-  // Toggle theme
-  function toggleTheme() {
-    setTheme(t => (t === "dark" ? "light" : "dark"));
-  }
-
-  // Sign in/out functions exposed to UI
+  // sign in with popup (Google)
   async function handleSignIn() {
     try {
       await signInWithPopup(auth, provider);
     } catch (err) {
-      console.error(err);
-      alert("Sign-in failed. See console.");
+      console.error("Sign-in error", err);
+      alert("Sign-in failed — check console.");
     }
   }
+
   async function handleSignOut() {
     try {
+      // set offline status in DB
+      if (user) {
+        const uref = ref(db, `users/${user.uid}`);
+        dbUpdate(uref, { online: false }).catch(() => {});
+      }
       await signOut(auth);
       setUser(null);
+      setShowContacts(true);
     } catch (err) {
-      console.error(err);
+      console.error("Sign-out error", err);
     }
   }
 
-  // Build small inline style theme
-  const palette = theme === "dark"
-    ? { bg: "#0b141a", sidebar: "#202c33", panel: "#111b21", tile: "#2a3942", text: "#e9edef", muted: "#9fbfb1", accent: "#00a884" }
-    : { bg: "#f6f7f8", sidebar: "#ffffff", panel: "#ffffff", tile: "#e9eef0", text: "#081316", muted: "#607080", accent: "#007a66" };
+  // -------------------- CONTACTS --------------------
+  // subscribe to /users node to build contacts list
+  function subscribeContacts() {
+    if (!user) return;
+    const usersRef = ref(db, "users");
+    onValue(usersRef, (snap) => {
+      const data = snap.val() || {};
+      // Transform to array and keep current user out
+      const arr = Object.keys(data)
+        .filter((k) => k !== user.uid)
+        .map((k) => ({ id: k, ...data[k] }));
+      setContacts(arr);
+    });
+    // also ensure current user exists in users node
+    const myRef = ref(db, `users/${user.uid}`);
+    dbSet(myRef, {
+      uid: user.uid,
+      displayName: user.displayName || "Anonymous",
+      photoURL: user.photoURL || "",
+      online: true,
+      about: "Hey there — I'm using Let's Chat!",
+      createdAt: Date.now(),
+    }).catch((e) => console.warn("set user failed", e));
+  }
 
-  const styles = {
-    app: { display: "flex", height: "100vh", background: palette.bg, color: palette.text, fontFamily: "Segoe UI, Roboto, Arial", overflow: "hidden" },
-    sidebar: { width: sidebarVisible ? 320 : 0, minWidth: sidebarVisible ? 260 : 0, background: palette.sidebar, borderRight: `1px solid ${palette.tile}`, transition: "width .2s ease", overflow: "hidden" },
-    header: { padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${palette.tile}` },
-    logoWrap: { display: "flex", alignItems: "center", gap: 10 },
-    logoImg: { width: 44, height: 44, borderRadius: 10 },
-    search: { margin: 12, padding: "10px 14px", borderRadius: 24, background: palette.tile, color: palette.text, border: "none", width: "calc(100% - 24px)", outline: "none" },
-    contactsWrap: { overflowY: "auto", height: "calc(100vh - 160px)", paddingBottom: 10 },
-    contactRow: { display: "flex", gap: 12, padding: "10px 12px", alignItems: "center", cursor: "pointer", borderBottom: `1px solid ${palette.tile}`, transition: "background .12s" },
-    contactName: { margin: 0, fontWeight: 600 },
-    contactMeta: { fontSize: 12, color: palette.muted },
-    chatArea: { flex: 1, display: "flex", flexDirection: "column", background: palette.panel },
-    chatHeader: { display: "flex", alignItems: "center", gap: 12, padding: 12, borderBottom: `1px solid ${palette.tile}`, background: palette.panel },
-    chatBody: { flex: 1, padding: 18, overflowY: "auto", backgroundImage: "url('https://i.imgur.com/6dJx4zf.png')", backgroundSize: "contain", backgroundRepeat: "repeat", backgroundBlendMode: "overlay", backgroundColor: palette.panel },
-    messageRow: { display: "flex", flexDirection: "column", marginBottom: 12, maxWidth: "78%" },
-    bubbleMine: { alignSelf: "flex-end", background: palette.accent, color: "#fff", padding: "10px 14px", borderRadius: 12, borderTopRightRadius: 4 },
-    bubbleOther: { alignSelf: "flex-start", background: palette.tile, color: palette.text, padding: "10px 14px", borderRadius: 12, borderTopLeftRadius: 4 },
-    metaSmall: { fontSize: 11, color: palette.muted, marginTop: 6, display: "flex", justifyContent: "space-between" },
-    footer: { padding: 10, display: "flex", gap: 8, alignItems: "center", borderTop: `1px solid ${palette.tile}`, background: palette.panel },
-    input: { flex: 1, padding: "10px 14px", borderRadius: 22, border: "none", outline: "none", background: palette.tile, color: palette.text, fontSize: 15 },
-    roundBtn: { width: 44, height: 44, borderRadius: 999, border: "none", background: palette.accent, color: "#fff", cursor: "pointer" },
-    smallBtn: { border: "none", background: "transparent", color: palette.muted, cursor: "pointer", fontSize: 18 },
-    emojiBox: { position: "absolute", bottom: 80, right: sidebarVisible ? 340 : 20, background: palette.panel, border: `1px solid ${palette.tile}`, padding: 8, borderRadius: 8, display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6, zIndex: 50 }
-  };
+  // -------------------- CHAT (messages) --------------------
+  // compute chatId deterministic for two users
+  function chatIdFor(u1, u2) {
+    if (!u1 || !u2) return null;
+    return u1 > u2 ? `${u1}_${u2}` : `${u2}_${u1}`;
+  }
 
-  // When user logs out ensure we clear listeners
+  // open chat with contact
+  function openChat(contact) {
+    if (!user || !contact) return;
+    setSelectedContact(contact);
+    setShowContacts(false);
+    attachMessagesListener(contact);
+  }
+
+  // attach listener for messages for selected contact
+  function attachMessagesListener(contact) {
+    cleanupMessagesListener();
+    const id = chatIdFor(user.uid, contact.id);
+    const messagesRef = ref(db, `chats/${id}/messages`);
+    messagesRefHandle.current = messagesRef;
+    onValue(messagesRef, (snap) => {
+      const raw = snap.val() || {};
+      // raw is keyed by push ids — convert to sorted array
+      const arr = Object.keys(raw)
+        .map((k) => ({ id: k, ...raw[k] }))
+        .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      setMessages(arr);
+      // scroll after UI update
+      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 120);
+    });
+  }
+
+  // detach messages listener cleanly
+  function cleanupMessagesListener() {
+    if (messagesRefHandle.current) {
+      try { off(messagesRefHandle.current); } catch {}
+      messagesRefHandle.current = null;
+    }
+    setMessages([]);
+  }
+
+  // send message in common structure
+  async function sendMessage() {
+    if (!selectedContact || !text.trim() || !user) return;
+    const id = chatIdFor(user.uid, selectedContact.id);
+    const pushRef = push(ref(db, `chats/${id}/messages`));
+    const payload = {
+      from: user.uid,
+      name: user.displayName || "Me",
+      text: text.trim(),
+      ts: Date.now(),
+    };
+    await setWithCatch(pushRef, payload);
+    setText("");
+    setShowEmoji(false);
+    // optionally update "last message" summary for contacts
+    const metaRef = ref(db, `chats/${id}/meta`);
+    dbSet(metaRef, { lastMessage: payload.text, lastTs: payload.ts }).catch(()=>{});
+  }
+
+  // small helper to set and catch
+  async function setWithCatch(refNode, value) {
+    try { await dbSet(refNode, value); } catch (e) { console.error(e); }
+  }
+
+  // -------------------- TYPING (simple local + DB) --------------------
+  function notifyTyping(isTyping) {
+    if (!selectedContact || !user) return;
+    const id = chatIdFor(user.uid, selectedContact.id);
+    const typingRef = ref(db, `chats/${id}/typing/${user.uid}`);
+    dbSet(typingRef, { typing: isTyping }).catch(()=>{});
+    if (isTyping) {
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => {
+        dbSet(typingRef, { typing: false }).catch(()=>{});
+      }, 2000);
+    }
+  }
+
+  // -------------------- VOICE-TO-TEXT --------------------
+  async function startStopListening() {
+    if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) {
+      alert("Voice recognition not supported in this browser.");
+      return;
+    }
+    const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!speechRef.current) {
+      const rec = new Speech();
+      rec.lang = "en-IN";
+      rec.interimResults = false;
+      rec.maxAlternatives = 1;
+
+      rec.onstart = () => setListening(true);
+      rec.onend = () => setListening(false);
+      rec.onerror = (e) => {
+        console.error("Speech error", e);
+        setListening(false);
+      };
+      rec.onresult = (ev) => {
+        const txt = ev.results[0][0].transcript || "";
+        // append with a space
+        setText((t) => (t ? t + " " + txt : txt));
+      };
+      speechRef.current = rec;
+      rec.start();
+    } else {
+      // if active, stop; else start new instance
+      try {
+        const rec = speechRef.current;
+        if (listening) {
+          rec.stop();
+          setListening(false);
+          speechRef.current = null;
+        } else {
+          rec.start();
+        }
+      } catch (e) {
+        console.warn(e);
+        speechRef.current = null;
+        setListening(false);
+      }
+    }
+  }
+
+  // -------------------- EMOJI PICKER (simple) --------------------
+  function insertEmoji(e) {
+    setText((t) => (t ? t + e : e));
+    setShowEmoji(false);
+  }
+
+  // -------------------- BACK (close chat) --------------------
+  function goBackToContacts() {
+    setShowContacts(true);
+    setSelectedContact(null);
+    cleanupMessagesListener();
+  }
+
+  // -------------------- small cleanup on unload --------------------
   useEffect(() => {
     return () => {
-      if (messagesRefActive.current) off(messagesRefActive.current);
-      if (typingRefActive.current) off(typingRefActive.current);
+      // stop speech if active
+      try { speechRef.current?.stop(); } catch {}
+      // mark offline
+      if (user) {
+        const uref = ref(db, `users/${user.uid}`);
+        dbUpdate(uref, { online: false }).catch(() => {});
+      }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Render login screen if not signed in
+  // -------------------- UI STYLES (inline) --------------------
+  const styles = {
+    app: {
+      height: "100vh",
+      display: "flex",
+      flexDirection: "column",
+      fontFamily: "Segoe UI, Roboto, system-ui, sans-serif",
+      background: "#0b141a",
+      color: "#e6eef0",
+    },
+    header: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: "10px 14px",
+      background: "#075e54",
+      color: "white",
+      boxShadow: "0 1px 0 rgba(0,0,0,0.2)",
+    },
+    container: {
+      display: "flex",
+      flex: 1,
+      minHeight: 0, // for children scrolling
+    },
+    sidebar: {
+      width: 340,
+      maxWidth: "42%",
+      minWidth: 260,
+      background: "#111b21",
+      borderRight: "1px solid #223433",
+      overflow: "auto",
+    },
+    main: {
+      flex: 1,
+      display: "flex",
+      flexDirection: "column",
+      background: "#0b141a",
+    },
+    contactItem: {
+      display: "flex",
+      gap: 12,
+      padding: "12px 14px",
+      alignItems: "center",
+      borderBottom: "1px solid rgba(255,255,255,0.02)",
+      cursor: "pointer",
+      background: "transparent",
+    },
+    avatar: {
+      width: 48,
+      height: 48,
+      borderRadius: "50%",
+      objectFit: "cover",
+      background: "#2d3b3b",
+      display: "inline-block",
+    },
+    contactName: { fontSize: 16, fontWeight: 600, margin: 0 },
+    contactMeta: { fontSize: 13, color: "#9fbfb1", marginTop: 4 },
+
+    chatHeader: {
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      padding: "12px 14px",
+      borderBottom: "1px solid rgba(255,255,255,0.03)",
+      background: "#0f2623",
+    },
+    chatBody: {
+      flex: 1,
+      padding: 16,
+      overflow: "auto",
+      backgroundImage: "url('https://i.imgur.com/6dJx4zf.png')",
+      backgroundRepeat: "repeat",
+      backgroundSize: "220px",
+    },
+    messageRow: {
+      marginBottom: 10,
+      display: "flex",
+    },
+    bubbleMe: {
+      marginLeft: "auto",
+      background: "#056162",
+      color: "white",
+      padding: "8px 12px",
+      borderRadius: 12,
+      maxWidth: "74%",
+      wordBreak: "break-word",
+    },
+    bubbleThem: {
+      marginRight: "auto",
+      background: "#111b21",
+      color: "#e6eef0",
+      border: "1px solid rgba(255,255,255,0.03)",
+      padding: "8px 12px",
+      borderRadius: 12,
+      maxWidth: "74%",
+      wordBreak: "break-word",
+    },
+    composer: {
+      display: "flex",
+      gap: 8,
+      padding: 10,
+      alignItems: "center",
+      borderTop: "1px solid rgba(255,255,255,0.03)",
+      background: "#0f2623",
+    },
+    input: {
+      flex: 1,
+      padding: "10px 12px",
+      borderRadius: 20,
+      border: "none",
+      outline: "none",
+      background: "#122523",
+      color: "#e6eef0",
+      fontSize: 15,
+    },
+    iconBtn: {
+      background: "transparent",
+      border: "none",
+      color: "#e6eef0",
+      cursor: "pointer",
+      fontSize: 18,
+      padding: 8,
+    },
+    emojiBox: {
+      position: "absolute",
+      bottom: 70,
+      right: 22,
+      width: 260,
+      background: "#0b141a",
+      border: "1px solid rgba(255,255,255,0.04)",
+      boxShadow: "0 6px 18px rgba(0,0,0,0.5)",
+      padding: 8,
+      borderRadius: 8,
+      display: "grid",
+      gridTemplateColumns: "repeat(8,1fr)",
+      gap: 6,
+    },
+    smallNote: { fontSize: 13, color: "#9fbfb1" },
+    loginWrap: {
+      height: "100vh",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      background:
+        "linear-gradient(180deg, rgba(4,95,84,1) 0%, rgba(7,94,84,1) 35%, rgba(3,54,52,1) 100%)",
+      color: "white",
+      flexDirection: "column",
+    },
+    logo: { width: 96, height: 96, borderRadius: 18, marginBottom: 12 },
+    backBtn: {
+      background: "transparent",
+      border: "none",
+      color: "#fff",
+      fontSize: 20,
+      cursor: "pointer",
+      marginRight: 8,
+    },
+
+    // responsive tweaks
+    '@mediaMobile': {
+      sidebar: { width: "100%", minWidth: "100%" },
+    },
+  };
+
+  // -------------------- RENDER --------------------
+
+  // Not signed in -> show simple login card
   if (!user) {
     return (
-      <div style={{ ...styles.app, alignItems: "center", justifyContent: "center" }}>
+      <div style={styles.loginWrap}>
         <div style={{ textAlign: "center" }}>
-          <img src="https://cdn-icons-png.flaticon.com/512/733/733585.png" alt="logo" style={{ width: 120, height: 120, marginBottom: 12, borderRadius: 18 }} />
-          <h1 style={{ margin: 6 }}>Let's Chat</h1>
-          <p style={{ color: palette.muted }}>Sign in to start chatting with friends and HA Chat</p>
-          <div style={{ marginTop: 12 }}>
-            <button onClick={handleSignIn} style={{ padding: "10px 18px", borderRadius: 12, background: palette.accent, color: "#fff", border: "none", cursor: "pointer" }}>
-              Sign in with Google
+          <img
+            alt="logo"
+            src="https://i.imgur.com/3y2zKqz.png"
+            style={styles.logo}
+          />
+          <h1 style={{ margin: 0, fontSize: 28 }}>Let's Chat</h1>
+          <p style={{ marginTop: 8, color: "#bfeadf" }}>Fast local chat demo</p>
+        </div>
+
+        <div style={{ marginTop: 20 }}>
+          <button
+            onClick={handleSignIn}
+            style={{
+              padding: "12px 20px",
+              borderRadius: 24,
+              background: "#00a884",
+              color: "white",
+              border: "none",
+              cursor: "pointer",
+              fontSize: 16,
+            }}
+          >
+            Sign in with Google
+          </button>
+        </div>
+        <div style={{ marginTop: 18 }}>
+          <small style={{ color: "#9fbfb1" }}>
+            (Sign in required to chat with friends)
+          </small>
+        </div>
+      </div>
+    );
+  }
+
+  // If showContacts is true (contacts-first view)
+  if (showContacts) {
+    return (
+      <div style={{ ...styles.app }}>
+        <div style={styles.header}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <img
+              src="https://i.imgur.com/3y2zKqz.png"
+              alt="logo"
+              style={{ width: 44, height: 44, borderRadius: 10 }}
+            />
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>Let's Chat</div>
+              <div style={{ fontSize: 12, color: "#bfeadf" }}>
+                {user.displayName}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <button
+              onClick={handleSignOut}
+              style={{
+                ...styles.iconBtn,
+                border: "1px solid rgba(255,255,255,0.06)",
+                padding: "8px 12px",
+                borderRadius: 18,
+              }}
+              title="Sign out"
+            >
+              Sign out
             </button>
+          </div>
+        </div>
+
+        <div style={styles.container}>
+          <div style={styles.sidebar}>
+            <div style={{ padding: 12 }}>
+              <div style={{ fontSize: 14, color: "#9fbfb1" }}>
+                Your contacts
+              </div>
+            </div>
+
+            {contacts.length === 0 ? (
+              <div style={{ padding: 20, color: "#9fbfb1" }}>
+                No other users found. Invite friends to sign in.
+              </div>
+            ) : (
+              contacts.map((c) => (
+                <div
+                  key={c.id}
+                  style={styles.contactItem}
+                  onClick={() => openChat(c)}
+                  title={`Chat with ${c.displayName || c.name || "Friend"}`}
+                >
+                  <img
+                    src={c.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(c.displayName || "F")}`}
+                    alt="avatar"
+                    style={styles.avatar}
+                  />
+                  <div style={{ flex: 1 }}>
+                    <div style={styles.contactName}>
+                      {c.displayName || c.name || "Friend"}
+                    </div>
+                    <div style={styles.contactMeta}>
+                      {c.online ? "Online" : "Offline"} • {c.about || ""}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div style={styles.main}>
+            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#9fbfb1" }}>
+              <div style={{ maxWidth: 520, textAlign: "center" }}>
+                <h2 style={{ marginTop: 0 }}>Welcome, {user.displayName}</h2>
+                <p style={{ color: "#a9d3c7" }}>
+                  Select a contact to start chatting. You can use voice-to-text, emojis, and real-time messages.
+                </p>
+                <div style={{ marginTop: 16 }}>
+                  <button
+                    onClick={() => setShowContacts(true)}
+                    style={{
+                      padding: "10px 16px",
+                      background: "#00a884",
+                      color: "white",
+                      borderRadius: 18,
+                      border: "none",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Open contacts
+                  </button>
+                </div>
+                <div style={{ marginTop: 18, color: "#7fbfb1", fontSize: 13 }}>
+                  Tip: other users who signed in will appear in the contacts list.
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
     );
   }
 
-  // Main app UI
+  // Chat view (selectedContact != null and showContacts === false)
   return (
-    <div style={styles.app}>
-      {/* Sidebar */}
-      <div style={styles.sidebar}>
-        <div style={styles.header}>
-          <div style={styles.logoWrap}>
-            <img src="https://cdn-icons-png.flaticon.com/512/733/733585.png" alt="logo" style={styles.logoImg} />
-            <div>
-              <div style={{ fontWeight: 800 }}>{user.displayName}</div>
-              <div style={{ fontSize: 12, color: palette.muted }}>Online</div>
+    <div style={{ ...styles.app }}>
+      <div style={styles.header}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <button onClick={goBackToContacts} style={styles.backBtn} aria-label="Back to contacts">
+            ←
+          </button>
+          <img
+            src={selectedContact.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(selectedContact.displayName || "F")}`}
+            alt="avatar"
+            style={{ width: 44, height: 44, borderRadius: 10 }}
+          />
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>
+              {selectedContact.displayName || selectedContact.name || "Friend"}
             </div>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button title="Toggle theme" onClick={toggleTheme} style={styles.smallBtn}>{theme === "dark" ? "🌙" : "☀️"}</button>
-            <button title="Sign out" onClick={handleSignOut} style={styles.smallBtn}>⎋</button>
+            <div style={{ fontSize: 12, color: "#bfeadf" }}>
+              {selectedContact.online ? "Online" : "Offline"}
+            </div>
           </div>
         </div>
 
-        <input placeholder="Search contacts" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={styles.search} />
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button
+            onClick={() => {}}
+            style={{ ...styles.iconBtn }}
+            title="Profile / info"
+          >
+            ℹ️
+          </button>
+          <button onClick={handleSignOut} style={styles.iconBtn} title="Sign out">
+            ⎋
+          </button>
+        </div>
+      </div>
 
-        <div style={styles.contactsWrap}>
-          {contacts.filter(c => (c.name || "").toLowerCase().includes(searchQuery.toLowerCase())).map(contact => (
-            <div key={contact.id} onClick={() => openChat(contact)} style={{ ...styles.contactRow, background: selectedContact?.id === contact.id ? palette.tile : "transparent" }}>
-              <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name||contact.id}`} alt="" style={{ width: 46, height: 46, borderRadius: 999, objectFit: "cover" }} />
-              <div>
-                <div style={styles.contactName}>{contact.name}{contact.isBot ? " · HA" : ""}</div>
-                <div style={styles.contactMeta}>{contact.online ? "Online" : `Last seen ${contact.lastSeen ? new Date(contact.lastSeen).toLocaleString() : "unknown"}`}</div>
+      <div style={styles.container}>
+        <div style={styles.sidebar}>
+          {/* small contact preview list on left for wide screens */}
+          <div style={{ padding: 12 }}>
+            <div style={{ fontSize: 14, color: "#9fbfb1" }}>Contacts</div>
+          </div>
+
+          {contacts.map((c) => (
+            <div
+              key={c.id}
+              style={{
+                ...styles.contactItem,
+                background: c.id === selectedContact.id ? "rgba(0,168,132,0.08)" : undefined,
+              }}
+              onClick={() => {
+                // switch chat quickly
+                if (c.id === selectedContact.id) return;
+                cleanupMessagesListener();
+                setSelectedContact(c);
+                attachMessagesListener(c);
+              }}
+            >
+              <img src={c.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(c.displayName || "F")}`} alt="avatar" style={styles.avatar} />
+              <div style={{ flex: 1 }}>
+                <div style={styles.contactName}>{c.displayName || c.name || "Friend"}</div>
+                <div style={styles.contactMeta}>{c.online ? "Online" : "Offline"}</div>
               </div>
             </div>
           ))}
         </div>
-      </div>
 
-      {/* Chat area */}
-      <div style={styles.chatArea}>
-        {selectedContact ? (
-          <>
-            <div style={styles.chatHeader}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <button onClick={() => setSidebarVisible(v => !v)} style={styles.smallBtn}>☰</button>
-                <img src={selectedContact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${selectedContact.name||selectedContact.id}`} alt="" style={{ width: 44, height: 44, borderRadius: 999 }} />
-                <div>
-                  <div style={{ fontWeight: 700 }}>{selectedContact.name}</div>
-                  <div style={{ fontSize: 12, color: palette.muted }}>{typingStatus || (selectedContact.online ? "Online" : `Last seen ${selectedContact.lastSeen ? new Date(selectedContact.lastSeen).toLocaleString() : "unknown"}`)}</div>
-                </div>
-              </div>
-
-              <div style={{ display: "flex", gap: 8 }}>
-                <label style={styles.smallBtn} title="Attach image">
-                  📎
-                  <input key={fileInputKey} type="file" accept="image/*" onChange={handleImageFile} style={{ display: "none" }} />
-                </label>
-              </div>
+        <div style={styles.main}>
+          <div style={styles.chatHeader}>
+            <div style={{ fontSize: 13, color: "#9fbfb1" }}>
+              Chat with {selectedContact.displayName || selectedContact.name}
             </div>
-
-            <div style={styles.chatBody}>
-              {messages.map(m => (
-                <div key={m.id} style={{ ...styles.messageRow, alignItems: m.sender === user.uid ? "flex-end" : "flex-start" }}>
-                  <div style={m.sender === user.uid ? styles.bubbleMine : styles.bubbleOther}>
-                    {/* message content */}
-                    {m.deleted ? (
-                      <i style={{ opacity: 0.8 }}>Message deleted</i>
-                    ) : (
-                      <>
-                        {m.type === "image" && m.url ? <img src={m.url} alt={m.text} style={{ maxWidth: 320, borderRadius: 8 }} /> : null}
-                        {m.type === "text" && <div style={{ whiteSpace: "pre-wrap" }}>{m.text}{m.edited ? " · (edited)" : ""}</div>}
-                      </>
-                    )}
-
-                    <div style={styles.metaSmall}>
-                      <div style={{ fontSize: 11 }}>{fmtTime(m.timestamp)}</div>
-                      <div style={{ fontSize: 12, color: palette.muted }}>{m.sender === user.uid ? (m.read ? "✓✓" : m.delivered ? "✓" : "…") : ""}</div>
-                    </div>
-                  </div>
-
-                  {/* message actions */}
-                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                    {m.sender === user.uid && !m.deleted && <button title="Edit" onClick={() => editMessage(m)} style={styles.smallBtn}>✎</button>}
-                    {m.sender === user.uid && !m.deleted && <button title="Delete" onClick={() => deleteMessage(m)} style={styles.smallBtn}>🗑</button>}
-                    <button title="React" onClick={() => toggleReaction(m, "👍")} style={styles.smallBtn}>👍</button>
-                  </div>
-
-                  {/* show reactions if any */}
-                  {m.reactions && Object.keys(m.reactions).length > 0 && (
-                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                      {Object.entries(m.reactions).map(([emo, arr]) => (
-                        <div key={emo} style={{ background: palette.tile, padding: "4px 8px", borderRadius: 12 }}>
-                          <span style={{ marginRight: 6 }}>{emo}</span><small style={{ color: palette.muted }}>{arr.length}</small>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              <div ref={messagesEndRef} />
-            </div>
-
-            <div style={styles.footer}>
-              <button onClick={() => setEmojiOpen(o => !o)} style={styles.smallBtn}>😊</button>
-              {emojiOpen && (
-                <div style={styles.emojiBox}>
-                  {EMOJI_LIST.map(e => <button key={e} onClick={() => { setText(t => t + e); setEmojiOpen(false); }} style={{ fontSize: 18, border: "none", background: "transparent", cursor: "pointer" }}>{e}</button>)}
-                </div>
-              )}
-
-              <input placeholder="Type a message" value={text} onChange={(e) => { setText(e.target.value); updateTypingStatus(true); }} onKeyDown={onMessageKeyDown} style={styles.input} />
-              <button title={listening ? "Stop listening" : "Voice to text"} onClick={startVoiceToText} style={styles.roundBtn}>{listening ? "⏹" : "🎤"}</button>
-              <button title="Send" onClick={() => sendTextMessage()} style={styles.roundBtn}>➤</button>
-            </div>
-          </>
-        ) : (
-          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: palette.muted }}>
-            <div style={{ textAlign: "center" }}>
-              <h2>Welcome — select a contact to start</h2>
-              <p>HA Chat (AI) appears in contacts as "HA Chat". Use voice-to-text (🎤) to speak and send messages.</p>
+            <div style={{ marginLeft: "auto", fontSize: 12, color: "#9fbfb1" }}>
+              {messages.length === 0 ? "" : `${messages.length} messages`}
             </div>
           </div>
-        )}
+
+          <div style={styles.chatBody}>
+            {messages.length === 0 && (
+              <div style={{ textAlign: "center", marginTop: 40, color: "#9fbfb1" }}>
+                No messages yet — say hi!
+              </div>
+            )}
+
+            {messages.map((m) => (
+              <div
+                key={m.id}
+                style={{
+                  ...styles.messageRow,
+                  justifyContent: m.from === user.uid ? "flex-end" : "flex-start",
+                }}
+              >
+                <div style={m.from === user.uid ? styles.bubbleMe : styles.bubbleThem}>
+                  <div style={{ fontSize: 13 }}>{m.text}</div>
+                  <div style={{ marginTop: 6, fontSize: 11, color: "rgba(255,255,255,0.6)", textAlign: "right" }}>
+                    {new Date(m.ts || m.timestamp || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            <div ref={messagesEndRef} />
+          </div>
+
+          <div style={styles.composer}>
+            <button
+              onClick={() => setShowEmoji((s) => !s)}
+              style={styles.iconBtn}
+              title="Emoji"
+            >
+              😊
+            </button>
+
+            <div style={{ position: "relative", flex: 1 }}>
+              <input
+                value={text}
+                onChange={(e) => {
+                  setText(e.target.value);
+                  notifyTyping(true);
+                }}
+                onBlur={() => notifyTyping(false)}
+                placeholder="Type a message"
+                style={styles.input}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") sendMessage();
+                }}
+              />
+
+              {showEmoji && (
+                <div style={styles.emojiBox}>
+                  {EMOJIS.map((em) => (
+                    <button
+                      key={em}
+                      onClick={() => insertEmoji(em)}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        cursor: "pointer",
+                        fontSize: 18,
+                      }}
+                      title={em}
+                    >
+                      {em}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={startStopListening}
+              style={{
+                ...styles.iconBtn,
+                background: listening ? "rgba(255,80,80,0.14)" : "transparent",
+                borderRadius: 8,
+              }}
+              title="Voice to text"
+            >
+              🎤
+            </button>
+
+            <button
+              onClick={sendMessage}
+              style={{
+                background: "#00a884",
+                border: "none",
+                color: "white",
+                padding: "10px 14px",
+                borderRadius: 20,
+                cursor: "pointer",
+              }}
+              title="Send"
+            >
+              ➤
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
