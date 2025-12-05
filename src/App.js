@@ -1,3 +1,4 @@
+
 // src/App.js 
 import React, { useEffect, useRef, useState } from "react";
 import {
@@ -87,66 +88,65 @@ export default function App() {
   const typingTimerRef = useRef(null);
 
   // ---------------- Auth & initial subscriptions ----------------
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      if (u) {
-        setUser(u);
-        const myRef = dbRef(db, `users/${u.uid}`);
-        set(myRef, { name: u.displayName || "", photo: u.photoURL || "", email: u.email || "", online: true, lastSeen: nowTs() }).catch(()=>{});
+ useEffect(() => {
+  const unsub = onAuthStateChanged(auth, (u) => {
+    if (u) {
+      setUser(u);
+      const myRef = dbRef(db, `users/${u.uid}`);
+      set(myRef, { name: u.displayName || "", photo: u.photoURL || "", email: u.email || "", online: true, lastSeen: nowTs() }).catch(()=>{});
 
-        const usersRef = dbRef(db, "users");
-        onValue(usersRef, (snap) => {
-          const raw = snap.val() || {};
-          const arr = Object.keys(raw)
-            .filter(k => k && k !== u.uid)
-            .map(k => ({ id: k, ...raw[k] }));
-          const ha = { id: "ha_bot", name: "HA Chat", photo: `https://api.dicebear.com/6.x/identicon/svg?seed=HAChat`, isBot: true, online: true };
-          const merged = [ha, ...arr];
-          setContactsAll(merged);
+      const usersRef = dbRef(db, "users");
+      onValue(usersRef, (snap) => {
+        const raw = snap.val() || {};
+        const arr = Object.keys(raw)
+          .filter(k => k && k !== u.uid)
+          .map(k => ({ id: k, ...raw[k] }));
+        const ha = { id: "ha_bot", name: "HA Chat", photo: `https://api.dicebear.com/6.x/identicon/svg?seed=HAChat`, isBot: true, online: true };
+        const merged = [ha, ...arr];
+        setContactsAll(merged);
 
-          const map = {};
-          Object.keys(raw).forEach(k => { if (raw[k] && raw[k].lastSeen) map[k] = raw[k].lastSeen; });
-          setLastSeenMap(map);
-        });
+        const map = {};
+        Object.keys(raw).forEach(k => { if (raw[k] && raw[k].lastSeen) map[k] = raw[k].lastSeen; });
+        setLastSeenMap(map);
+      });
 
-        onValue(dbRef(db, `users/${u.uid}/friends`), snap => setFriendsMap(snap.val() || {}));
-        onValue(dbRef(db, `users/${u.uid}/invitesSent`), snap => setInvitesSent(snap.val() || {}));
-        onValue(dbRef(db, `users/${u.uid}/invitesReceived`), snap => setInvitesReceived(snap.val() || {}));
+      onValue(dbRef(db, `users/${u.uid}/friends`), snap => setFriendsMap(snap.val() || {}));
+      onValue(dbRef(db, `users/${u.uid}/invitesSent`), snap => setInvitesSent(snap.val() || {}));
+      onValue(dbRef(db, `users/${u.uid}/invitesReceived`), snap => setInvitesReceived(snap.val() || {}));
 
-        /* >>> ADDED FOR FRIEND PERSISTENCE >>> */
-        // Load permanent shadow friend list and merge with normal friendsMap
-        onValue(dbRef(db, `users/${u.uid}/friendsShadow`), snap => {
-          const shadow = snap.val() || {};
-          setFriendsMap(prev => ({ ...shadow, ...prev }));
-        });
-        /* <<< END ADDED <<< */
+      onValue(dbRef(db, `users/${u.uid}/friendsShadow`), snap => {
+        const shadow = snap.val() || {};
+        setFriendsMap(prev => ({ ...shadow, ...prev }));
+      });
 
-      } else {
-        setUser(null);
-        setContactsAll([]);
-        setFriendsMap({});
-        setInvitesSent({});
-        setInvitesReceived({});
-        setSelectedContact(null);
-      }
-    });
+    } else {
+      setUser(null);
+      setContactsAll([]);
+      setFriendsMap({});
+      setInvitesSent({});
+      setInvitesReceived({});
+      setSelectedContact(null);
+    }
+  });
+
+  return () => unsub();
+}, []); 
 
     // RESPONSIVE FIX #1
-    function onResize() {
-      if (window.innerWidth < 820) {
-        setSidebarVisible(!selectedContact);
-      } else {
-        setSidebarVisible(true);
-      }
+   useEffect(() => {
+  function onResize() {
+    if (window.innerWidth < 820) {
+      // On small screens, show sidebar only if no chat is open
+      setSidebarVisible(!selectedContact);
+    } else {
+      // On large screens, always show sidebar
+      setSidebarVisible(true);
     }
-    onResize();
-    window.addEventListener("resize", onResize);
-
-    return () => {
-      unsub();
-      window.removeEventListener("resize", onResize);
-    };
-  }, [selectedContact]);
+  }
+  window.addEventListener("resize", onResize);
+  onResize(); // call initially
+  return () => window.removeEventListener("resize", onResize);
+}, [selectedContact]);
 
   // ---------------- Chat open / subscribe ----------------
   function makeChatId(a,b) { if (!a||!b) return null; return a > b ? `${a}_${b}` : `${b}_${a}`; }
@@ -352,14 +352,17 @@ export default function App() {
   const styles = {
     app: { display:"flex", height:"100vh", background:palette.bg, color:palette.text, fontFamily:"Segoe UI, Roboto, Arial", overflow:"hidden" },
     sidebar: {
-      width: sidebarVisible ? 320 : 0,
-      minWidth: sidebarVisible ? 260 : 0,
-      background:palette.sidebar,
-      borderRight:`1px solid ${palette.tile}`,
-      transition:"width .22s",
-      display:"flex",
-      flexDirection:"column",
-      overflow:"hidden"
+       width: sidebarVisible ? (window.innerWidth < 820 ? '100%' : 320) : 0,
+    minWidth: sidebarVisible ? (window.innerWidth < 820 ? '100%' : 260) : 0,
+    transition: "width .22s",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+    position: window.innerWidth < 820 ? 'absolute' : 'relative',
+    zIndex: window.innerWidth < 820 ? 50 : 1,
+    height: "100vh",
+    background: palette.sidebar,
+    borderRight: `1px solid ${palette.tile}`
     },
     header: { padding:14, display:"flex", justifyContent:"space-between", alignItems:"center", borderBottom:`1px solid ${palette.tile}`, background:palette.sidebar },
     logoWrap: { display:"flex", alignItems:"center", gap:10 },
@@ -368,7 +371,11 @@ export default function App() {
     contactsWrap: { overflowY:"auto", height:"calc(100vh - 220px)", paddingBottom:10 },
     sectionTitle: { padding: "10px 14px", color: palette.muted, fontSize: 13, fontWeight: 700, background: "transparent" },
     contactRow: { display:"flex", gap:12, padding:"10px 12px", alignItems:"center", cursor:"pointer", borderBottom:`1px solid ${palette.tile}` },
-    chatArea: { flex:1, display:"flex", flexDirection:"column", background:palette.panel },
+    chatArea: { flex: 1,
+    display: sidebarVisible && window.innerWidth < 820 ? 'none' : 'flex',
+    flexDirection: "column",
+    background: palette.panel,
+    width: sidebarVisible && window.innerWidth < 820 ? '100%' : 'auto' },
     chatHeader: { display:"flex", alignItems:"center", gap:12, padding:12, borderBottom:`1px solid ${palette.tile}`, background:palette.panel },
     chatBody: { flex:1, padding:18, overflowY:"auto", backgroundColor: theme==="dark" ? "#071112" : "#e6e5dbff" },
     messageRow: { display:"flex", flexDirection:"column", marginBottom:12, maxWidth:"78%" },
@@ -656,4 +663,4 @@ export default function App() {
       </div>
     </div>
   );
-}
+  }
