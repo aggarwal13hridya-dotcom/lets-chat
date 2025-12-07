@@ -101,6 +101,13 @@ export default function App() {
         const arr = Object.keys(raw)
           .filter(k => k && k !== u.uid)
           .map(k => ({ id: k, ...raw[k] }));
+        const jointChat = { 
+  id: "joint_chat", 
+  name: "Joint Chat", 
+  photo: `https://img.freepik.com/premium-photo/modern-remote-work-desk-with-abstract-glossy-monitor-accessories-clean-organized-setup_980716-525683.jpg`, 
+  isBot: false, 
+  online: true 
+};
         const ha = { id: "ha_bot", name: "HA Chat", photo: `https://api.dicebear.com/6.x/identicon/svg?seed=HAChat`, isBot: true, online: true };
         const merged = [ha, ...arr];
         setContactsAll(merged);
@@ -407,7 +414,13 @@ export default function App() {
       </div>
     );
   }
-
+  const jointChat = { 
+  id: "joint_chat", 
+  name: "Joint Chat", 
+  photo: `https://img.freepik.com/premium-photo/modern-remote-work-desk-with-abstract-glossy-monitor-accessories-clean-organized-setup_980716-525683.jpg`, 
+  isBot: false, 
+  online: true 
+};
   const ha = { id: "ha_bot", name: "HA Chat", photo: `https://api.dicebear.com/6.x/identicon/svg?seed=HAChat`, isBot: true, online: true };
   const usersWithoutSelf = contactsAll.filter(c => c.id !== user.uid && c.id !== "ha_bot");
   const friendsList = usersWithoutSelf.filter(u => isFriend(u.id));
@@ -435,6 +448,20 @@ export default function App() {
         <input placeholder="Search contacts" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} style={styles.search} />
 
         <div style={styles.contactsWrap}>
+          <div style={styles.sectionTitle}>Global Chat</div>
+<div
+  onClick={() => openChat(jointChat)}
+  style={{
+    ...styles.contactRow,
+    background: selectedContact?.id === "joint_chat" ? (theme==="dark"?"#121d20ff":"#eef6f3") : "transparent"
+  }}
+>
+  <img src={jointChat.photo} style={{ width:46, height:46, borderRadius:999 }} />
+  <div>
+    <div style={{ fontWeight:700 }}>{jointChat.name}</div>
+    <div style={{ fontSize:12, color:palette.muted }}>All users can chat here</div>
+  </div>
+</div>
           <div style={styles.sectionTitle}>HA Chat</div>
           <div
             onClick={()=>openChat(ha)}
@@ -662,5 +689,4 @@ export default function App() {
         )}
       </div>
     </div>
-  );
-  }
+  );}
