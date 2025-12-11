@@ -329,7 +329,7 @@ export default function App() {
 
     // ---------------- Styles ----------------
     const palette = theme === "dark"
-        ? { bg:"#0b141a", sidebar:"#202c33", panel:"#0f1a1b", tile:"#1f2c33", text:"#e9edef", muted:"#9fbfb1", accent:"#b2f391ff", readBlue:"#1877f2" }
+        ? { bg:"#0b141a", sidebar:"#202c33", panel:"#0f1a1b", tile:"#1f2c33", text:"#e9edef", muted:"#9fbfb1", accent:"#b1f58fff", readBlue:"#1877f2" }
         : { bg:"#f6f7f8", sidebar:"#ffffff", panel:"#ffffff", tile:"#e9eef0", text:"#081316", muted:"#607080", accent:"#D0F0C0", readBlue:"#1877f2" };
 
     const styles = {
