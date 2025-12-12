@@ -1,4 +1,4 @@
-// src/App.js 
+// src/App.js
 import React, { useEffect, useRef, useState } from "react";
 import {
     signInWithPopup,
@@ -14,7 +14,12 @@ import {
     remove,
     off,
 } from "firebase/database";
-import { auth, db, provider } from "./firebase";
+import { 
+    ref as storageRef, 
+    uploadBytes, 
+    getDownloadURL 
+} from "firebase/storage";
+import { auth, db, storage, provider } from "./firebase";
 import { HA_USER, replyAsHaBot } from "./HAchat"; 
 import GlobalChat from "./GlobalChat";
 
@@ -66,6 +71,10 @@ export default function App() {
     const [searchQuery, setSearchQuery] = useState("");
     const [typingStatus, setTypingStatus] = useState("");
     const [lastSeenMap, setLastSeenMap] = useState({});
+    
+    // --- STATE FOR ACTIONS ---
+    const [hoveredMessageId, setHoveredMessageId] = useState(null); 
+    const [activeMenuId, setActiveMenuId] = useState(null); 
 
     // refs
     const messagesRefActive = useRef(null);
@@ -73,6 +82,7 @@ export default function App() {
     const recognitionRef = useRef(null);
     const messagesEndRef = useRef(null);
     const typingTimerRef = useRef(null);
+    const holdTimerRef = useRef(null); 
 
     // ---------------- Auth & initial subscriptions ----------------
     useEffect(() => {
@@ -115,7 +125,7 @@ export default function App() {
         return () => unsub();
     }, []); 
 
-    // RESPONSIVE FIX #1: Auto-toggle sidebar visibility based on screen size and selected chat
+    // RESPONSIVE FIX
     useEffect(() => {
         function onResize() {
             if (window.innerWidth < 820) {
@@ -129,30 +139,25 @@ export default function App() {
         return () => window.removeEventListener("resize", onResize);
     }, [selectedContact]);
 
-    // ---------------- Chat open / subscribe ----------------
+    // ---------------- Chat open ----------------
     function makeChatId(a,b) { if (!a||!b) return null; return a > b ? `${a}_${b}` : `${b}_${a}`; }
 
     function openChat(contact) {
         if (!user) return;
-        
-        // Cleanup old listeners when switching contacts
         if (messagesRefActive.current) off(messagesRefActive.current);
         if (typingRefActive.current) off(typingRefActive.current);
         
         setSelectedContact(contact);
-        setMessages([]); // Clear messages when switching chat
+        setMessages([]); 
 
         if (window.innerWidth < 820) setSidebarVisible(false);
 
-        // If it's the Global Chat, the subscription/messaging is handled internally by GlobalChat.js
         if (contact.isGlobal) {
             setTypingStatus("");
-            setText(""); // Also clear text input
+            setText(""); 
             return;
         }
 
-
-        // --- DM / HA Chat Logic ---
         const chatId = makeChatId(user.uid, contact.id);
         const msgsRef = dbRef(db, `chats/${chatId}/messages`);
         messagesRefActive.current = msgsRef;
@@ -178,6 +183,42 @@ export default function App() {
         });
     }
 
+    // ---------------- Action Logic (Exact Requirements) ----------------
+
+    // 1. Mouse Enter (Desktop): Show 3-dots
+    function handleMouseEnter(msgId) {
+        if (window.matchMedia("(pointer: fine)").matches) {
+            setHoveredMessageId(msgId);
+        }
+    }
+
+    // 2. Mouse Leave (Desktop): Hide everything
+    function handleMouseLeave() {
+        setHoveredMessageId(null);
+        setActiveMenuId(null); // List disappears
+    }
+
+    // 3. Click 3 Dots (Desktop): Show List
+    function handleDotsClick(e, msgId) {
+        e.stopPropagation();
+        setActiveMenuId(msgId);
+    }
+
+    // 4. Touch Hold (Mobile): Show List directly
+    function handleTouchStart(msgId) {
+        holdTimerRef.current = setTimeout(() => {
+            setActiveMenuId(msgId);
+            setHoveredMessageId(null); 
+        }, 2000); 
+    }
+
+    function handleTouchEnd() {
+        if (holdTimerRef.current) {
+            clearTimeout(holdTimerRef.current);
+            holdTimerRef.current = null;
+        }
+    }
+
     // ---------------- Friend functions ----------------
     async function addFriend(id) {
         if (!user) return;
@@ -195,9 +236,9 @@ export default function App() {
         await remove(dbRef(db, `users/${id}/friendsShadow/${user.uid}`));
     }
 
-    // ---------------- Messaging (DM/HA only) ----------------
+    // ---------------- Messaging ----------------
     async function sendTextMessage(body) {
-        if (!user || !selectedContact || selectedContact.isGlobal) return; // Blocked for Global Chat
+        if (!user || !selectedContact || selectedContact.isGlobal) return;
         const content = (body ?? text).trim();
         if (!content) return;
         const chatId = makeChatId(user.uid, selectedContact.id);
@@ -213,26 +254,24 @@ export default function App() {
         setText("");
         updateTyping(false);
 
-        // --- HA CHAT LOGIC MOVED HERE ---
         if (selectedContact.id === HA_USER.id) {
             replyAsHaBot(chatId, content);
         }
     }
 
     function updateTyping(status) {
-        if (!user || !selectedContact || selectedContact.isGlobal) return; // Blocked for Global Chat
+        if (!user || !selectedContact || selectedContact.isGlobal) return;
         const id = makeChatId(user.uid, selectedContact.id);
         set(dbRef(db, `chats/${id}/typing/${user.uid}`), { typing: status, name: user.displayName });
     }
 
     function handleTypingChange(e) {
         setText(e.target.value);
-        if (selectedContact && !selectedContact.isGlobal) { // Only update typing for DMs
+        if (selectedContact && !selectedContact.isGlobal) {
             updateTyping(true);
             if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
             typingTimerRef.current = setTimeout(()=>updateTyping(false), 1000);
         } else {
-             // For Global Chat, we still update the text state but skip typing status updates
              setText(e.target.value);
         }
     }
@@ -254,47 +293,74 @@ export default function App() {
         rec.start();
     }
 
-    function handleImageFile(e) {
-        if (selectedContact?.isGlobal) { e.target.value = ""; return alert("Image sending disabled for Global Chat."); }
-        const file = e.target.files?.[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = async () => {
-            const chatId = makeChatId(user.uid, selectedContact.id);
-            const p = push(dbRef(db, `chats/${chatId}/messages`));
+    async function uploadImageAndSend(file, u, receiverId, chatPath) {
+        if (!u || !file) return;
+
+        const isGlobal = receiverId === GLOBAL_CHAT_USER.id;
+        const uploadFileName = `${u.uid}-${nowTs()}-${file.name}`;
+        const storagePath = isGlobal 
+            ? `global_chat_images/${uploadFileName}` 
+            : `chat_images/${makeChatId(u.uid, receiverId)}/${uploadFileName}`;
+
+        const sRef = storageRef(storage, storagePath);
+        
+        try {
+            const snapshot = await uploadBytes(sRef, file);
+            const url = await getDownloadURL(snapshot.ref);
+
+            const p = push(dbRef(db, chatPath));
             await set(p, {
-                sender:user.uid,
-                name:user.displayName,
-                text:file.name,
-                type:"image",
-                url:reader.result,
-                timestamp:nowTs(),
-                delivered:false, read:false
+                sender: u.uid,
+                name: u.displayName,
+                photo: u.photoURL || `https://api.dicebear.com/6.x/initials/svg?seed=${u.displayName}`,
+                text: file.name,
+                type: "image",
+                url: url,
+                timestamp: nowTs(),
+                delivered: !isGlobal ? false : true,
+                read: true,
+                edited: false, deleted: false, reactions: {}
             });
-        };
-        reader.readAsDataURL(file);
-        e.target.value = "";
+        } catch (error) {
+            console.error("Image upload or message send failed:", error);
+            alert("Failed to send image.");
+        }
+    }
+
+    function handleImageFileDM(e) {
+        const file = e.target.files?.[0];
+        e.target.value = null; 
+        if (!file || !user || !selectedContact) return;
+        
+        const receiverId = selectedContact.id;
+        const chatId = makeChatId(user.uid, receiverId);
+        const chatPath = `chats/${chatId}/messages`;
+
+        uploadImageAndSend(file, user, receiverId, chatPath);
     }
 
     async function editMessage(msg) {
-        if (selectedContact?.isGlobal || msg.sender !== user.uid) return;
         const nt = window.prompt("Edit:", msg.text);
         if (nt == null) return;
-        const id = makeChatId(user.uid, selectedContact.id);
-        await update(dbRef(db, `chats/${id}/messages/${msg.id}`), { text:nt, edited:true });
+        const id = selectedContact.isGlobal ? null : makeChatId(user.uid, selectedContact.id);
+        const path = selectedContact.isGlobal ? `globalChat/messages/${msg.id}` : `chats/${id}/messages/${msg.id}`;
+        await update(dbRef(db, path), { text:nt, edited:true });
+        setActiveMenuId(null);
     }
 
     async function deleteMessage(msg) {
-        if (selectedContact?.isGlobal) return;
         if (!window.confirm("Delete for everyone?")) return;
-        const id = makeChatId(user.uid, selectedContact.id);
-        await update(dbRef(db, `chats/${id}/messages/${msg.id}`), { text:"Message deleted", deleted:true });
+        const id = selectedContact.isGlobal ? null : makeChatId(user.uid, selectedContact.id);
+        const path = selectedContact.isGlobal ? `globalChat/messages/${msg.id}` : `chats/${id}/messages/${msg.id}`;
+        await update(dbRef(db, path), { text:"Message deleted", deleted:true });
+        setActiveMenuId(null);
     }
 
     async function toggleReaction(msg, emoji) {
-        if (selectedContact?.isGlobal) return; 
-        const chatId = makeChatId(user.uid, selectedContact.id);
-        const mRef = dbRef(db, `chats/${chatId}/messages/${msg.id}`);
+        const id = selectedContact.isGlobal ? null : makeChatId(user.uid, selectedContact.id);
+        const path = selectedContact.isGlobal ? `globalChat/messages/${msg.id}` : `chats/${id}/messages/${msg.id}`;
+
+        const mRef = dbRef(db, path);
         const snap = await new Promise(res => onValue(mRef, s => res(s.val()), { onlyOnce:true }));
         const reactions = snap?.reactions || {};
         const arr = reactions[emoji] || [];
@@ -302,6 +368,7 @@ export default function App() {
         const next = has ? arr.filter(x=>x!==user.uid) : [...arr, user.uid];
         const nextObj = { ...reactions, [emoji]: next.length ? next : undefined };
         await update(mRef, { reactions: nextObj });
+        setActiveMenuId(null);
     }
 
     // Cleanup
@@ -321,7 +388,6 @@ export default function App() {
     }, [user]);
 
     useEffect(()=>{ 
-        // Only scroll for DMs, as GlobalChat handles its own scroll logic after data update
         if (!selectedContact?.isGlobal) { 
             messagesEndRef.current?.scrollIntoView({ behavior:"smooth" }); 
         }
@@ -329,23 +395,23 @@ export default function App() {
 
     // ---------------- Styles ----------------
     const palette = theme === "dark"
-        ? { bg:"#0b141a", sidebar:"#202c33", panel:"#0f1a1b", tile:"#1f2c33", text:"#e9edef", muted:"#9fbfb1", accent:"#b1f58fff", readBlue:"#1877f2" }
+        ? { bg:"#0b141a", sidebar:"#202c33", panel:"#0f1a1b", tile:"#1f2c33", text:"#e9edef", muted:"#9fbfb1", accent:"#b2f391ff", readBlue:"#1877f2" }
         : { bg:"#f6f7f8", sidebar:"#ffffff", panel:"#ffffff", tile:"#e9eef0", text:"#081316", muted:"#607080", accent:"#D0F0C0", readBlue:"#1877f2" };
 
     const styles = {
         app: { display:"flex", height:"100vh", background:palette.bg, color:palette.text, fontFamily:"Segoe UI, Roboto, Arial", overflow:"hidden" },
         sidebar: {
             width: sidebarVisible ? (window.innerWidth < 820 ? '100%' : 320) : 0,
-        minWidth: sidebarVisible ? (window.innerWidth < 820 ? '100%' : 260) : 0,
-        transition: "width .22s",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        position: window.innerWidth < 820 ? 'absolute' : 'relative',
-        zIndex: window.innerWidth < 820 ? 50 : 1,
-        height: "100vh",
-        background: palette.sidebar,
-        borderRight: `1px solid ${palette.tile}`
+            minWidth: sidebarVisible ? (window.innerWidth < 820 ? '100%' : 260) : 0,
+            transition: "width .22s",
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            position: window.innerWidth < 820 ? 'absolute' : 'relative',
+            zIndex: window.innerWidth < 820 ? 50 : 1,
+            height: "100vh",
+            background: palette.sidebar,
+            borderRight: `1px solid ${palette.tile}`
         },
         header: { padding:14, display:"flex", justifyContent:"space-between", alignItems:"center", borderBottom:`1px solid ${palette.tile}`, background:palette.sidebar },
         logoWrap: { display:"flex", alignItems:"center", gap:10 },
@@ -362,14 +428,16 @@ export default function App() {
         chatHeader: { display:"flex", alignItems:"center", gap:12, padding:12, borderBottom:`1px solid ${palette.tile}`, background:palette.panel },
         chatBody: { flex:1, padding:18, overflowY:"auto", backgroundColor: theme==="dark" ? "#071112" : "#e6e5dbff" },
         
-        messageRow: { display:"flex", flexDirection:"column", marginBottom:12, maxWidth:"78%" },
+        messageRow: { display:"flex", flexDirection:"column", marginBottom:12, maxWidth:"78%", position:"relative" }, 
+        
         bubbleMine: { 
             alignSelf:"flex-end", 
             background:palette.accent, 
             color:"#000000ff", 
             padding:"10px 14px", 
             borderRadius:12, 
-            wordBreak:"break-word" 
+            wordBreak:"break-word",
+            position: "relative" 
         },
         bubbleOther: { 
             alignSelf:"flex-start", 
@@ -377,7 +445,8 @@ export default function App() {
             color:palette.text, 
             padding:"10px 14px", 
             borderRadius:12, 
-            wordBreak:"break-word" 
+            wordBreak:"break-word",
+            position: "relative" 
         },
         
         metaSmall: { fontSize:11, color:palette.muted, marginTop:6, display:"flex", justifyContent:"space-between" },
@@ -385,8 +454,52 @@ export default function App() {
         input: { flex:1, padding:"10px 14px", borderRadius:22, border:"none", outline:"none", background:palette.tile, color:palette.text, fontSize:15 },
         roundBtn: { width:44, height:44, borderRadius:999, border:"none", background:palette.accent, color:"#fff", cursor:"pointer" },
         smallBtn: { border:"none", background:"transparent", color:palette.muted, cursor:"pointer", fontSize:18 },
+        
+        // --- 3 Dots Button (Positioned ON the message) ---
+        threeDots: {
+            position: "absolute",
+            top: 2,
+            right: 4, 
+            width: 20,
+            height: 20,
+            borderRadius: "50%",
+            background: "rgba(0,0,0,0.1)", 
+            color: palette.text,
+            fontSize: 14,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            zIndex: 15,
+            lineHeight: 0
+        },
+        
+        // --- Action Menu List (The container for Delete/Edit/React options) ---
+        actionMenu: {
+            position: "absolute",
+            top: 0,
+            background: palette.sidebar,
+            borderRadius: 8,
+            boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+            zIndex: 20,
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+            minWidth: 160,
+        },
+        menuItem: {
+            padding: "10px 14px",
+            fontSize: 14,
+            cursor: "pointer",
+            color: palette.text,
+            borderBottom: `1px solid ${palette.tile}`,
+            display: "flex",
+            justifyContent: "space-between"
+        },
+        
         emojiBox: { position:"absolute", bottom:78, right: sidebarVisible ? 340 : 20, background:palette.panel, border:`1px solid ${palette.tile}`, padding:8, borderRadius:8, display:"grid", gridTemplateColumns:"repeat(10, 1fr)", gap:6, zIndex:60, maxWidth:520, maxHeight:220, overflowY:"auto" }
     };
+
 
     const isFriend = id => !!friendsMap[id];
 
@@ -421,7 +534,6 @@ export default function App() {
                             <div style={{ fontSize:12, color:palette.muted }}>{user.email}</div>
                         </div>
                     </div>
-
                     <div style={{ display:"flex", gap:8 }}>
                         <button title="Toggle theme" onClick={()=>setTheme(p=>p==="light"?"dark":"light")} style={styles.smallBtn}>{theme==="dark"?"☀️":"🌙"}</button>
                         <button title="Sign out" onClick={()=>signOut(auth)} style={styles.smallBtn}>⎋</button>
@@ -431,101 +543,44 @@ export default function App() {
                 <input placeholder="Search contacts" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} style={styles.search} />
 
                 <div style={styles.contactsWrap}>
-                    
-                    {/* --- GLOBAL CHAT PINNED --- */}
                     <div style={styles.sectionTitle}>Global</div>
-                    <div
-                        onClick={()=>openChat(GLOBAL_CHAT_USER)}
-                        style={{
-                            ...styles.contactRow,
-                            background: selectedContact?.id === GLOBAL_CHAT_USER.id ? (theme==="dark"?"#121d20ff":"#eef6f3") : "transparent"
-                        }}
-                    >
+                    <div onClick={()=>openChat(GLOBAL_CHAT_USER)} style={{...styles.contactRow, background: selectedContact?.id === GLOBAL_CHAT_USER.id ? (theme==="dark"?"#121d20ff":"#eef6f3") : "transparent"}}>
                         <img src={GLOBAL_CHAT_USER.photo} style={{ width:46, height:46, borderRadius:999 }} />
-                        <div>
-                            <div style={{ fontWeight:700 }}>{GLOBAL_CHAT_USER.name}</div>
-                            <div style={{ fontSize:12, color:palette.muted }}>Public Chat</div>
-                        </div>
+                        <div><div style={{ fontWeight:700 }}>{GLOBAL_CHAT_USER.name}</div><div style={{ fontSize:12, color:palette.muted }}>Public Chat</div></div>
                     </div>
-                    {/* --- END GLOBAL CHAT PINNED --- */}
-
 
                     <div style={styles.sectionTitle}>HA Chat</div>
-                    <div
-                        onClick={()=>openChat(HA_USER)}
-                        style={{
-                            ...styles.contactRow,
-                            background: selectedContact?.id === HA_USER.id ? (theme==="dark"?"#121d20ff":"#eef6f3") : "transparent"
-                        }}
-                    >
+                    <div onClick={()=>openChat(HA_USER)} style={{...styles.contactRow, background: selectedContact?.id === HA_USER.id ? (theme==="dark"?"#121d20ff":"#eef6f3") : "transparent"}}>
                         <img src={HA_USER.photo} style={{ width:46, height:46, borderRadius:999 }} />
-                        <div>
-                            <div style={{ fontWeight:700 }}>{HA_USER.name}</div>
-                            <div style={{ fontSize:12, color:palette.muted }}>AI Assistant</div>
-                        </div>
+                        <div><div style={{ fontWeight:700 }}>{HA_USER.name}</div><div style={{ fontSize:12, color:palette.muted }}>AI Assistant</div></div>
                     </div>
 
-                    <div style={styles.sectionTitle}>Friends</div>
-                    {friendsList.length === 0 && (
-                        <div style={{ padding:"8px 14px", color:palette.muted }}>No friends yet</div>
-                    )}
-
-                    {friendsList
-                        .filter(c => (c.name||"").toLowerCase().includes(searchQuery.toLowerCase()))
-                        .map(contact => (
-                        <div
-                            key={contact.id}
-                            style={{
-                                ...styles.contactRow,
-                                background: selectedContact?.id === contact.id ? (theme==="dark"?"#132226":"#eef6f3") : "transparent"
-                            }}
-                            onClick={()=>openChat(contact)}
-                        >
+                    <div style={styles.sectionTitle}>Friends (DM)</div>
+                    {friendsList.length === 0 && <div style={{ padding:"8px 14px", color:palette.muted }}>No friends yet</div>}
+                    {friendsList.filter(c => (c.name||"").toLowerCase().includes(searchQuery.toLowerCase())).map(contact => (
+                        <div key={contact.id} style={{...styles.contactRow, background: selectedContact?.id === contact.id ? (theme==="dark"?"#132226":"#eef6f3") : "transparent"}} onClick={()=>openChat(contact)}>
                             <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name}`} style={{ width:46, height:46, borderRadius:999 }} />
-                            <div style={{ flex:1 }}>
-                                <div style={{ fontWeight:700 }}>{contact.name}</div>
-                                <div style={{ fontSize:12, color:palette.muted }}>
-                                    {contact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[contact.id])}`}
-                                </div>
-                            </div>
+                            <div style={{ flex:1 }}><div style={{ fontWeight:700 }}>{contact.name}</div><div style={{ fontSize:12, color:palette.muted }}>{contact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[contact.id])}`}</div></div>
                             <button title="Remove friend" onClick={e=>{e.stopPropagation(); removeFriend(contact.id);}} style={styles.smallBtn}>🗑</button>
                         </div>
                     ))}
 
                     <div style={styles.sectionTitle}>Users</div>
-                    {usersList
-                        .filter(c => (c.name||"").toLowerCase().includes(searchQuery.toLowerCase()))
-                        .map(contact => {
-                            return (
-                                <div key={contact.id} style={styles.contactRow}>
-                                    <div
-                                        style={{ display:"flex", flex:1, gap:12, cursor:"pointer" }}
-                                        onClick={async ()=>{
-                                            if (!isFriend(contact.id)) {
-                                                await addFriend(contact.id);
-                                            }
-                                            openChat(contact);
-                                        }}
-                                    >
-                                        <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name}`} style={{ width:46, height:46, borderRadius:999 }} />
-                                        <div>
-                                            <div style={{ fontWeight:700 }}>{contact.name}</div>
-                                            <div style={{ fontSize:12, color:palette.muted }}>
-                                                {contact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[contact.id])}`}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <button title="Make Friend" onClick={async () => { await addFriend(contact.id); openChat(contact); }} style={styles.smallBtn}>➕</button>
-                                </div>
-                            );
-                        })}
+                    {usersList.filter(c => (c.name||"").toLowerCase().includes(searchQuery.toLowerCase())).map(contact => (
+                        <div key={contact.id} style={styles.contactRow}>
+                            <div style={{ display:"flex", flex:1, gap:12, cursor:"pointer" }} onClick={async ()=>{ if (!isFriend(contact.id)) { await addFriend(contact.id); } openChat(contact); }}>
+                                <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name}`} style={{ width:46, height:46, borderRadius:999 }} />
+                                <div><div style={{ fontWeight:700 }}>{contact.name}</div><div style={{ fontSize:12, color:palette.muted }}>{contact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[contact.id])}`}</div></div>
+                            </div>
+                            <button title="Make Friend" onClick={async () => { await addFriend(contact.id); openChat(contact); }} style={styles.smallBtn}>➕</button>
+                        </div>
+                    ))}
                 </div>
             </div>
 
             {/* Chat Area */}
             {selectedContact ? (
                 selectedContact.isGlobal ? (
-                    // --- Render Global Chat Component ---
                     <GlobalChat 
                         user={user} 
                         palette={palette} 
@@ -535,125 +590,121 @@ export default function App() {
                         messagesEndRef={messagesEndRef}
                         EMOJIS={EMOJIS}
                         selectedContact={selectedContact}
-                        // --- FIX: Pass the function to close the chat and show sidebar ---
                         onCloseChat={() => {
                             setSelectedContact(null);
                             if (window.innerWidth < 820) setSidebarVisible(true);
                         }}
+                        uploadImageAndSend={uploadImageAndSend}
+                        hoveredMessageId={hoveredMessageId}
+                        activeMenuId={activeMenuId}
+                        handleMouseEnter={handleMouseEnter}
+                        handleMouseLeave={handleMouseLeave}
+                        handleDotsClick={handleDotsClick}
+                        handleTouchStart={handleTouchStart}
+                        handleTouchEnd={handleTouchEnd}
+                        deleteMessage={deleteMessage}
+                        editMessage={editMessage}
+                        toggleReaction={toggleReaction}
+                        fmtTime={fmtTime}
                     />
                 ) : (
-                // --- Standard DM/HA Chat Content ---
                     <div style={styles.chatArea}>
                         <div style={styles.chatHeader}>
                             <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                                {window.innerWidth < 820 && (
-                                    <button
-                                        onClick={()=>{
-                                            setSelectedContact(null);
-                                            setSidebarVisible(true);
-                                        }}
-                                        style={styles.smallBtn}
-                                    >
-                                        ←
-                                    </button>
-                                )}
-
+                                {window.innerWidth < 820 && <button onClick={()=>{setSelectedContact(null); setSidebarVisible(true);}} style={styles.smallBtn}>←</button>}
                                 <img src={selectedContact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${selectedContact.name}`} style={{ width:44, height:44, borderRadius:999 }} />
-                                <div>
-                                    <div style={{ fontWeight:700 }}>{selectedContact.name}</div>
-                                    <div style={{ fontSize:12, color:palette.muted }}>
-                                        {typingStatus ||
-                                            (selectedContact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[selectedContact.id])}`)}
-                                    </div>
-                                </div>
+                                <div><div style={{ fontWeight:700 }}>{selectedContact.name}</div><div style={{ fontSize:12, color:palette.muted }}>{selectedContact.id === HA_USER.id ? "AI Assistant" : (selectedContact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[selectedContact.id])}`)}</div></div>
                             </div>
-
-                            <div style={{ display:"flex", gap:8 }}>
-                                <label>📎<input type="file" accept="image/*" onChange={handleImageFile} style={{display:"none"}}/></label>
-                            </div>
+                            <div style={{ display:"flex", gap:8 }}><label>📎<input type="file" accept="image/*" onChange={handleImageFileDM} style={{display:"none"}}/></label></div>
                         </div>
 
                         <div style={styles.chatBody}>
-                            {messages.map(m => (
-                                <div key={m.id} style={{ ...styles.messageRow, alignItems:m.sender===user.uid?"flex-end":"flex-start" }}>
-                                    <div style={m.sender === user.uid ? styles.bubbleMine : styles.bubbleOther}>
-                                        {m.deleted ? (
-                                            <i style={{ opacity:0.7 }}>Message deleted</i>
-                                        ) : (
-                                            <>
-                                                {m.type === "image" && m.url && (
-                                                    <img src={m.url} alt="" style={{ maxWidth:320, borderRadius:8 }} />
-                                                )}
-                                                <div style={{ whiteSpace:"pre-wrap" }}>
-                                                    {m.text}{m.edited?" · (edited)":""}
-                                                </div>
-                                            </>
+                            {messages.map(m => {
+                                const isMine = m.sender === user.uid;
+                                const showDots = hoveredMessageId === m.id && activeMenuId !== m.id;
+                                const showMenu = activeMenuId === m.id;
+
+                                return (
+                                    <div 
+                                        key={m.id} 
+                                        style={{...styles.messageRow, alignItems: isMine ? "flex-end" : "flex-start"}}
+                                        // Mouse enter/leave on the whole row/wrapper
+                                        onMouseEnter={() => handleMouseEnter(m.id)}
+                                        onMouseLeave={handleMouseLeave}
+                                        onTouchStart={() => handleTouchStart(m.id)}
+                                        onTouchEnd={handleTouchEnd}
+                                    >
+                                        
+                                        {/* Action Menu List (The Margin/Gap is set HERE) */}
+                                        {showMenu && (
+                                            <div style={{
+                                                ...styles.actionMenu, 
+                                                // *** MODIFIED FOR 8 PIXEL MARGIN ***
+                                                [isMine?"right":"left"]: "calc(0% + 100px)", 
+                                                top: 0
+                                            }}>
+                                                {/* Delete is available for all own messages */}
+                                                <div style={styles.menuItem} onClick={()=>deleteMessage(m)}>delete message 🗑️</div>
+
+                                                {/* Edit is only available for own, non-deleted messages */}
+                                                {isMine && !m.deleted && <div style={styles.menuItem} onClick={()=>editMessage(m)}>edit message ✎</div>}
+                                                
+                                                {/* React is available for all messages */}
+                                                <div style={styles.menuItem} onClick={()=>toggleReaction(m, "👍")}>react message 👍</div>
+                                            </div>
                                         )}
 
-                                        <div style={styles.metaSmall}>
-                                            <div>{fmtTime(m.timestamp)}</div>
-                                            <div style={{ color:m.read?palette.readBlue:palette.muted }}>
-                                                {m.sender===user.uid ? (m.read?"✔✔":(m.delivered?"✔":"…")) : ""}
+                                        {/* Message Bubble */}
+                                        <div style={isMine ? styles.bubbleMine : styles.bubbleOther}>
+                                            
+                                            {/* 3 Dots (Appears ON the message) */}
+                                            {showDots && (
+                                                <div style={styles.threeDots} onClick={(e) => handleDotsClick(e, m.id)}>•••</div>
+                                            )}
+
+                                            {m.deleted ? <i style={{ opacity:0.7 }}>Message deleted</i> : 
+                                            <>
+                                                {m.type === "image" && m.url && <img src={m.url} alt="" style={{ maxWidth:320, borderRadius:8, marginBottom: m.text ? 8 : 0 }} />}
+                                                <div style={{ whiteSpace:"pre-wrap" }}>{m.text}{m.edited?" · (edited)":""}</div>
+                                            </>}
+                                            <div style={styles.metaSmall}>
+                                                <div>{fmtTime(m.timestamp)}{isMine && !m.deleted && (m.read?" ✓✓":" ✓")}</div>
                                             </div>
                                         </div>
-                                    </div>
 
-                                    <div style={{ display:"flex", gap:6, marginTop:6 }}>
-                                        {m.sender === user.uid && !m.deleted && (
-                                            <>
-                                                <button onClick={()=>editMessage(m)} style={styles.smallBtn}>✎</button>
-                                                <button onClick={()=>deleteMessage(m)} style={styles.smallBtn}>🗑</button>
-                                            </>
+                                        {m.reactions && Object.keys(m.reactions).length > 0 && (
+                                            <div style={{ display:"flex", gap:6, marginTop:6 }}>
+                                                {Object.entries(m.reactions).map(([emo, arr])=>(
+                                                    <div key={emo} style={{ background:palette.tile, padding:"4px 8px", borderRadius:12 }}>{emo} <small style={{ color:palette.muted }}>{arr.length}</small></div>
+                                                ))}
+                                            </div>
                                         )}
-                                        <button onClick={()=>toggleReaction(m, "👍")} style={styles.smallBtn}>👍</button>
                                     </div>
-
-                                    {m.reactions && Object.keys(m.reactions).length > 0 && (
-                                        <div style={{ display:"flex", gap:6, marginTop:6 }}>
-                                            {Object.entries(m.reactions).map(([emo, arr])=>(
-                                                <div key={emo} style={{ background:palette.tile, padding:"4px 8px", borderRadius:12 }}>
-                                                    {emo} <small style={{ color:palette.muted }}>{arr.length}</small>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
-
+                                );
+                            })}
                             <div ref={messagesEndRef} />
+                            {typingStatus && <div style={{ fontSize:13, color:palette.muted, paddingLeft:10 }}>{typingStatus}</div>}
                         </div>
 
                         {emojiOpen && (
                             <div style={styles.emojiBox}>
-                                {EMOJIS.map(e=>(
-                                    <button key={e} onClick={()=>{ setText(t=>t+e); setEmojiOpen(false); }} style={{ fontSize:18, background:"transparent", border:"none", cursor:"pointer" }}>
-                                        {e}
-                                    </button>
-                                ))}
+                                {EMOJIS.map(e=>(<button key={e} onClick={()=>{ setText(t=>t+e); setEmojiOpen(false); }} style={{ fontSize:18, background:"transparent", border:"none", cursor:"pointer" }}>{e}</button>))}
                             </div>
                         )}
-
+                        
                         <div style={styles.footer}>
                             <button onClick={()=>setEmojiOpen(o=>!o)} style={styles.smallBtn}>😊</button>
-                            <input
-                                placeholder="Type a message"
-                                value={text}
-                                onChange={handleTypingChange}
-                                onKeyDown={(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendTextMessage(); } }}
-                                style={styles.input}
-                            />
-                            <button onClick={startVoiceToText} style={{ ...styles.roundBtn, background:listening?"#c0392b":palette.accent }}>
-                                {listening?"⏹":"🎤"}
-                            </button>
+                            <input placeholder={`Type a message to ${selectedContact.name}`} value={text} onChange={handleTypingChange} onKeyDown={(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendTextMessage(); } }} style={styles.input} />
+                            <button onClick={startVoiceToText} style={{ ...styles.roundBtn, background:listening?"#c0392b":palette.accent }}>{listening?"⏹":"🎤"}</button>
                             <button onClick={()=>sendTextMessage()} style={styles.roundBtn}>➤</button>
                         </div>
                     </div>
                 )
             ) : (
-                <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", color:palette.muted }}>
-                    <div style={{ textAlign:"center", maxWidth:520 }}>
-                        <h2>Welcome — select a contact</h2>
-                        <p>Global Chat and HA Chat are pinned at the top.</p>
+                <div style={{ ...styles.chatArea, justifyContent:"center", alignItems:"center" }}>
+                    <div style={{ textAlign:"center" }}>
+                        <h2 style={{ color:palette.muted }}>Select a Contact or Global Chat to begin messaging</h2>
+                        <p style={{ color:palette.muted }}>All messages are secured with Firebase.</p>
                     </div>
                 </div>
             )}
