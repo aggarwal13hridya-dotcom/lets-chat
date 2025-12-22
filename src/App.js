@@ -458,14 +458,14 @@ export default function App() {
                     </div>
                     <div style={{ display:"flex", gap:8 }}>
                         <button title="Toggle theme" onClick={()=>setTheme(p=>p==="light"?"dark":"light")} style={styles.smallBtn}>{theme==="dark"?"☀️":"🌙"}</button>
-                        <button title="Sign out" onClick={()=>signOut(auth)} style={styles.smallBtn}>⎋</button>
+                        <button title="Sign out" onClick={()=>signOut(auth)} style={styles.smallBtn}>⏻</button>
                     </div>
                 </div>
 
                 <input placeholder="Search contacts" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} style={styles.search} />
 
                 <div style={styles.contactsWrap}>
-                    <div style={styles.sectionTitle}>Global</div>
+                    <div style={styles.sectionTitle}>Global Chat</div>
                     <div onClick={()=>openChat(GLOBAL_CHAT_USER)} style={{...styles.contactRow, background: selectedContact?.id === GLOBAL_CHAT_USER.id ? (theme==="dark"?"#121d20ff":"#eef6f3") : "transparent"}}>
                         <img src={GLOBAL_CHAT_USER.photo} style={{ width:46, height:46, borderRadius:999 }} alt="Global Chat" />
                         <div><div style={{ fontWeight:700 }}>{GLOBAL_CHAT_USER.name}</div><div style={{ fontSize:12, color:palette.muted }}>Public Chat</div></div>
@@ -477,7 +477,7 @@ export default function App() {
                         <div><div style={{ fontWeight:700 }}>{HA_USER.name}</div><div style={{ fontSize:12, color:palette.muted }}>AI Assistant</div></div>
                     </div>
 
-                    <div style={styles.sectionTitle}>Friends (DM)</div>
+                    <div style={styles.sectionTitle}>Friends</div>
                     {friendsList.length === 0 && <div style={{ padding:"8px 14px", color:palette.muted }}>No friends yet</div>}
                     {friendsList.filter(c => (c.name||"").toLowerCase().includes(searchQuery.toLowerCase())).map(contact => (
                         <div key={contact.id} style={{...styles.contactRow, background: selectedContact?.id === contact.id ? (theme==="dark"?"#132226":"#eef6f3") : "transparent"}} onClick={()=>openChat(contact)}>
@@ -580,8 +580,7 @@ export default function App() {
             ) : (
                 <div style={{ ...styles.chatArea, justifyContent:"center", alignItems:"center" }}>
                     <div style={{ textAlign:"center" }}>
-                        <h2 style={{ color:palette.muted }}>Select a Contact or Global Chat to begin messaging</h2>
-                        <p style={{ color:palette.muted }}>All messages are secured with Firebase.</p>
+                        <h2 style={{ color:palette.muted }}>Select a Contact to begin messaging</h2>
                     </div>
                 </div>
             )}
