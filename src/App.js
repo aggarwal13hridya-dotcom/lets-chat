@@ -48,10 +48,11 @@ function timeAgo(ts) {
     return new Date(ts).toLocaleDateString();
 }
 
+// UPDATED GLOBAL CHAT PHOTO
 const GLOBAL_CHAT_USER = {
     id: "GLOBAL_CHAT_ID",
     name: "Global Chat",
-    photo: "https://cdn-icons-png.flaticon.com/512/3592/3592548.png",
+    photo: "https://thumbs.dreamstime.com/z/unity-group-illustration-white-86095637.jpg",
     isGlobal: true,
 };
 
@@ -185,26 +186,22 @@ export default function App() {
 
     // ---------------- Action Logic (Exact Requirements) ----------------
 
-    // 1. Mouse Enter (Desktop): Show 3-dots
     function handleMouseEnter(msgId) {
         if (window.matchMedia("(pointer: fine)").matches) {
             setHoveredMessageId(msgId);
         }
     }
 
-    // 2. Mouse Leave (Desktop): Hide everything
     function handleMouseLeave() {
         setHoveredMessageId(null);
-        setActiveMenuId(null); // List disappears
+        setActiveMenuId(null); 
     }
 
-    // 3. Click 3 Dots (Desktop): Show List
     function handleDotsClick(e, msgId) {
         e.stopPropagation();
         setActiveMenuId(msgId);
     }
 
-    // 4. Touch Hold (Mobile): Show List directly
     function handleTouchStart(msgId) {
         holdTimerRef.current = setTimeout(() => {
             setActiveMenuId(msgId);
@@ -271,8 +268,6 @@ export default function App() {
             updateTyping(true);
             if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
             typingTimerRef.current = setTimeout(()=>updateTyping(false), 1000);
-        } else {
-             setText(e.target.value);
         }
     }
 
@@ -295,7 +290,6 @@ export default function App() {
 
     async function uploadImageAndSend(file, u, receiverId, chatPath) {
         if (!u || !file) return;
-
         const isGlobal = receiverId === GLOBAL_CHAT_USER.id;
         const uploadFileName = `${u.uid}-${nowTs()}-${file.name}`;
         const storagePath = isGlobal 
@@ -303,11 +297,9 @@ export default function App() {
             : `chat_images/${makeChatId(u.uid, receiverId)}/${uploadFileName}`;
 
         const sRef = storageRef(storage, storagePath);
-        
         try {
             const snapshot = await uploadBytes(sRef, file);
             const url = await getDownloadURL(snapshot.ref);
-
             const p = push(dbRef(db, chatPath));
             await set(p, {
                 sender: u.uid,
@@ -322,8 +314,7 @@ export default function App() {
                 edited: false, deleted: false, reactions: {}
             });
         } catch (error) {
-            console.error("Image upload or message send failed:", error);
-            alert("Failed to send image.");
+            console.error("Image upload failed:", error);
         }
     }
 
@@ -331,11 +322,9 @@ export default function App() {
         const file = e.target.files?.[0];
         e.target.value = null; 
         if (!file || !user || !selectedContact) return;
-        
         const receiverId = selectedContact.id;
         const chatId = makeChatId(user.uid, receiverId);
         const chatPath = `chats/${chatId}/messages`;
-
         uploadImageAndSend(file, user, receiverId, chatPath);
     }
 
@@ -359,7 +348,6 @@ export default function App() {
     async function toggleReaction(msg, emoji) {
         const id = selectedContact.isGlobal ? null : makeChatId(user.uid, selectedContact.id);
         const path = selectedContact.isGlobal ? `globalChat/messages/${msg.id}` : `chats/${id}/messages/${msg.id}`;
-
         const mRef = dbRef(db, path);
         const snap = await new Promise(res => onValue(mRef, s => res(s.val()), { onlyOnce:true }));
         const reactions = snap?.reactions || {};
@@ -371,7 +359,6 @@ export default function App() {
         setActiveMenuId(null);
     }
 
-    // Cleanup
     useEffect(()=>{
         return () => {
             if (messagesRefActive.current) off(messagesRefActive.current);
@@ -420,86 +407,22 @@ export default function App() {
         contactsWrap: { overflowY:"auto", height:"calc(100vh - 220px)", paddingBottom:10 },
         sectionTitle: { padding: "10px 14px", color: palette.muted, fontSize: 13, fontWeight: 700, background: "transparent" },
         contactRow: { display:"flex", gap:12, padding:"10px 12px", alignItems:"center", cursor:"pointer", borderBottom:`1px solid ${palette.tile}` },
-        chatArea: { flex: 1,
-        display: sidebarVisible && window.innerWidth < 820 ? 'none' : 'flex',
-        flexDirection: "column",
-        background: palette.panel,
-        width: sidebarVisible && window.innerWidth < 820 ? '100%' : 'auto' },
+        chatArea: { flex: 1, display: sidebarVisible && window.innerWidth < 820 ? 'none' : 'flex', flexDirection: "column", background: palette.panel, width: sidebarVisible && window.innerWidth < 820 ? '100%' : 'auto' },
         chatHeader: { display:"flex", alignItems:"center", gap:12, padding:12, borderBottom:`1px solid ${palette.tile}`, background:palette.panel },
         chatBody: { flex:1, padding:18, overflowY:"auto", backgroundColor: theme==="dark" ? "#071112" : "#e6e5dbff" },
-        
         messageRow: { display:"flex", flexDirection:"column", marginBottom:12, maxWidth:"78%", position:"relative" }, 
-        
-        bubbleMine: { 
-            alignSelf:"flex-end", 
-            background:palette.accent, 
-            color:"#000000ff", 
-            padding:"10px 14px", 
-            borderRadius:12, 
-            wordBreak:"break-word",
-            position: "relative" 
-        },
-        bubbleOther: { 
-            alignSelf:"flex-start", 
-            background:palette.tile, 
-            color:palette.text, 
-            padding:"10px 14px", 
-            borderRadius:12, 
-            wordBreak:"break-word",
-            position: "relative" 
-        },
-        
+        bubbleMine: { alignSelf:"flex-end", background:palette.accent, color:"#000000ff", padding:"10px 14px", borderRadius:12, wordBreak:"break-word", position: "relative" },
+        bubbleOther: { alignSelf:"flex-start", background:palette.tile, color:palette.text, padding:"10px 14px", borderRadius:12, wordBreak:"break-word", position: "relative" },
         metaSmall: { fontSize:11, color:palette.muted, marginTop:6, display:"flex", justifyContent:"space-between" },
         footer: { padding:10, display:"flex", gap:8, alignItems:"center", borderTop:`1px solid ${palette.tile}`, background:palette.panel },
         input: { flex:1, padding:"10px 14px", borderRadius:22, border:"none", outline:"none", background:palette.tile, color:palette.text, fontSize:15 },
         roundBtn: { width:44, height:44, borderRadius:999, border:"none", background:palette.accent, color:"#fff", cursor:"pointer" },
         smallBtn: { border:"none", background:"transparent", color:palette.muted, cursor:"pointer", fontSize:18 },
-        
-        // --- 3 Dots Button (Positioned ON the message) ---
-        threeDots: {
-            position: "absolute",
-            top: 2,
-            right: 4, 
-            width: 20,
-            height: 20,
-            borderRadius: "50%",
-            background: "rgba(0,0,0,0.1)", 
-            color: palette.text,
-            fontSize: 14,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: "pointer",
-            zIndex: 15,
-            lineHeight: 0
-        },
-        
-        // --- Action Menu List (The container for Delete/Edit/React options) ---
-        actionMenu: {
-            position: "absolute",
-            top: 0,
-            background: palette.sidebar,
-            borderRadius: 8,
-            boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
-            zIndex: 20,
-            overflow: "hidden",
-            display: "flex",
-            flexDirection: "column",
-            minWidth: 160,
-        },
-        menuItem: {
-            padding: "10px 14px",
-            fontSize: 14,
-            cursor: "pointer",
-            color: palette.text,
-            borderBottom: `1px solid ${palette.tile}`,
-            display: "flex",
-            justifyContent: "space-between"
-        },
-        
+        threeDots: { position: "absolute", top: 2, right: 4, width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,0.1)", color: palette.text, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", zIndex: 15, lineHeight: 0 },
+        actionMenu: { position: "absolute", top: 0, background: palette.sidebar, borderRadius: 8, boxShadow: "0 2px 8px rgba(0,0,0,0.3)", zIndex: 20, overflow: "hidden", display: "flex", flexDirection: "column", minWidth: 160 },
+        menuItem: { padding: "10px 14px", fontSize: 14, cursor: "pointer", color: palette.text, borderBottom: `1px solid ${palette.tile}`, display: "flex", justifyContent: "space-between" },
         emojiBox: { position:"absolute", bottom:78, right: sidebarVisible ? 340 : 20, background:palette.panel, border:`1px solid ${palette.tile}`, padding:8, borderRadius:8, display:"grid", gridTemplateColumns:"repeat(10, 1fr)", gap:6, zIndex:60, maxWidth:520, maxHeight:220, overflowY:"auto" }
     };
-
 
     const isFriend = id => !!friendsMap[id];
 
@@ -524,7 +447,6 @@ export default function App() {
 
     return (
         <div style={styles.app}>
-            {/* Sidebar (Contacts List) */}
             <div style={styles.sidebar}>
                 <div style={styles.header}>
                     <div style={styles.logoWrap}>
@@ -545,13 +467,13 @@ export default function App() {
                 <div style={styles.contactsWrap}>
                     <div style={styles.sectionTitle}>Global</div>
                     <div onClick={()=>openChat(GLOBAL_CHAT_USER)} style={{...styles.contactRow, background: selectedContact?.id === GLOBAL_CHAT_USER.id ? (theme==="dark"?"#121d20ff":"#eef6f3") : "transparent"}}>
-                        <img src={GLOBAL_CHAT_USER.photo} style={{ width:46, height:46, borderRadius:999 }} />
+                        <img src={GLOBAL_CHAT_USER.photo} style={{ width:46, height:46, borderRadius:999 }} alt="Global Chat" />
                         <div><div style={{ fontWeight:700 }}>{GLOBAL_CHAT_USER.name}</div><div style={{ fontSize:12, color:palette.muted }}>Public Chat</div></div>
                     </div>
 
                     <div style={styles.sectionTitle}>HA Chat</div>
                     <div onClick={()=>openChat(HA_USER)} style={{...styles.contactRow, background: selectedContact?.id === HA_USER.id ? (theme==="dark"?"#121d20ff":"#eef6f3") : "transparent"}}>
-                        <img src={HA_USER.photo} style={{ width:46, height:46, borderRadius:999 }} />
+                        <img src={HA_USER.photo} style={{ width:46, height:46, borderRadius:999 }} alt="HA" />
                         <div><div style={{ fontWeight:700 }}>{HA_USER.name}</div><div style={{ fontSize:12, color:palette.muted }}>AI Assistant</div></div>
                     </div>
 
@@ -559,7 +481,7 @@ export default function App() {
                     {friendsList.length === 0 && <div style={{ padding:"8px 14px", color:palette.muted }}>No friends yet</div>}
                     {friendsList.filter(c => (c.name||"").toLowerCase().includes(searchQuery.toLowerCase())).map(contact => (
                         <div key={contact.id} style={{...styles.contactRow, background: selectedContact?.id === contact.id ? (theme==="dark"?"#132226":"#eef6f3") : "transparent"}} onClick={()=>openChat(contact)}>
-                            <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name}`} style={{ width:46, height:46, borderRadius:999 }} />
+                            <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name}`} style={{ width:46, height:46, borderRadius:999 }} alt={contact.name} />
                             <div style={{ flex:1 }}><div style={{ fontWeight:700 }}>{contact.name}</div><div style={{ fontSize:12, color:palette.muted }}>{contact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[contact.id])}`}</div></div>
                             <button title="Remove friend" onClick={e=>{e.stopPropagation(); removeFriend(contact.id);}} style={styles.smallBtn}>🗑</button>
                         </div>
@@ -569,7 +491,7 @@ export default function App() {
                     {usersList.filter(c => (c.name||"").toLowerCase().includes(searchQuery.toLowerCase())).map(contact => (
                         <div key={contact.id} style={styles.contactRow}>
                             <div style={{ display:"flex", flex:1, gap:12, cursor:"pointer" }} onClick={async ()=>{ if (!isFriend(contact.id)) { await addFriend(contact.id); } openChat(contact); }}>
-                                <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name}`} style={{ width:46, height:46, borderRadius:999 }} />
+                                <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name}`} style={{ width:46, height:46, borderRadius:999 }} alt={contact.name} />
                                 <div><div style={{ fontWeight:700 }}>{contact.name}</div><div style={{ fontSize:12, color:palette.muted }}>{contact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[contact.id])}`}</div></div>
                             </div>
                             <button title="Make Friend" onClick={async () => { await addFriend(contact.id); openChat(contact); }} style={styles.smallBtn}>➕</button>
@@ -578,41 +500,25 @@ export default function App() {
                 </div>
             </div>
 
-            {/* Chat Area */}
             {selectedContact ? (
                 selectedContact.isGlobal ? (
                     <GlobalChat 
-                        user={user} 
-                        palette={palette} 
-                        styles={styles} 
-                        text={text}
-                        setText={setText}
-                        messagesEndRef={messagesEndRef}
-                        EMOJIS={EMOJIS}
-                        selectedContact={selectedContact}
-                        onCloseChat={() => {
-                            setSelectedContact(null);
-                            if (window.innerWidth < 820) setSidebarVisible(true);
-                        }}
-                        uploadImageAndSend={uploadImageAndSend}
-                        hoveredMessageId={hoveredMessageId}
-                        activeMenuId={activeMenuId}
-                        handleMouseEnter={handleMouseEnter}
-                        handleMouseLeave={handleMouseLeave}
-                        handleDotsClick={handleDotsClick}
-                        handleTouchStart={handleTouchStart}
-                        handleTouchEnd={handleTouchEnd}
-                        deleteMessage={deleteMessage}
-                        editMessage={editMessage}
-                        toggleReaction={toggleReaction}
-                        fmtTime={fmtTime}
+                        user={user} palette={palette} styles={styles} text={text} setText={setText}
+                        messagesEndRef={messagesEndRef} EMOJIS={EMOJIS} selectedContact={selectedContact}
+                        onCloseChat={() => { setSelectedContact(null); if (window.innerWidth < 820) setSidebarVisible(true); }}
+                        uploadImageAndSend={uploadImageAndSend} hoveredMessageId={hoveredMessageId}
+                        activeMenuId={activeMenuId} handleMouseEnter={handleMouseEnter}
+                        handleMouseLeave={handleMouseLeave} handleDotsClick={handleDotsClick}
+                        handleTouchStart={handleTouchStart} handleTouchEnd={handleTouchEnd}
+                        deleteMessage={deleteMessage} editMessage={editMessage}
+                        toggleReaction={toggleReaction} fmtTime={fmtTime}
                     />
                 ) : (
                     <div style={styles.chatArea}>
                         <div style={styles.chatHeader}>
                             <div style={{ display:"flex", alignItems:"center", gap:12 }}>
                                 {window.innerWidth < 820 && <button onClick={()=>{setSelectedContact(null); setSidebarVisible(true);}} style={styles.smallBtn}>←</button>}
-                                <img src={selectedContact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${selectedContact.name}`} style={{ width:44, height:44, borderRadius:999 }} />
+                                <img src={selectedContact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${selectedContact.name}`} style={{ width:44, height:44, borderRadius:999 }} alt={selectedContact.name} />
                                 <div><div style={{ fontWeight:700 }}>{selectedContact.name}</div><div style={{ fontSize:12, color:palette.muted }}>{selectedContact.id === HA_USER.id ? "AI Assistant" : (selectedContact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[selectedContact.id])}`)}</div></div>
                             </div>
                             <div style={{ display:"flex", gap:8 }}><label>📎<input type="file" accept="image/*" onChange={handleImageFileDM} style={{display:"none"}}/></label></div>
@@ -623,45 +529,17 @@ export default function App() {
                                 const isMine = m.sender === user.uid;
                                 const showDots = hoveredMessageId === m.id && activeMenuId !== m.id;
                                 const showMenu = activeMenuId === m.id;
-
                                 return (
-                                    <div 
-                                        key={m.id} 
-                                        style={{...styles.messageRow, alignItems: isMine ? "flex-end" : "flex-start"}}
-                                        // Mouse enter/leave on the whole row/wrapper
-                                        onMouseEnter={() => handleMouseEnter(m.id)}
-                                        onMouseLeave={handleMouseLeave}
-                                        onTouchStart={() => handleTouchStart(m.id)}
-                                        onTouchEnd={handleTouchEnd}
-                                    >
-                                        
-                                        {/* Action Menu List (The Margin/Gap is set HERE) */}
+                                    <div key={m.id} style={{...styles.messageRow, alignItems: isMine ? "flex-end" : "flex-start"}} onMouseEnter={() => handleMouseEnter(m.id)} onMouseLeave={handleMouseLeave} onTouchStart={() => handleTouchStart(m.id)} onTouchEnd={handleTouchEnd}>
                                         {showMenu && (
-                                            <div style={{
-                                                ...styles.actionMenu, 
-                                                // *** MODIFIED FOR 8 PIXEL MARGIN ***
-                                                [isMine?"right":"left"]: "calc(0% + 100px)", 
-                                                top: 0
-                                            }}>
-                                                {/* Delete is available for all own messages */}
+                                            <div style={{ ...styles.actionMenu, [isMine?"right":"left"]: "calc(0% + 100px)", top: 0 }}>
                                                 <div style={styles.menuItem} onClick={()=>deleteMessage(m)}>delete message 🗑️</div>
-
-                                                {/* Edit is only available for own, non-deleted messages */}
                                                 {isMine && !m.deleted && <div style={styles.menuItem} onClick={()=>editMessage(m)}>edit message ✎</div>}
-                                                
-                                                {/* React is available for all messages */}
                                                 <div style={styles.menuItem} onClick={()=>toggleReaction(m, "👍")}>react message 👍</div>
                                             </div>
                                         )}
-
-                                        {/* Message Bubble */}
                                         <div style={isMine ? styles.bubbleMine : styles.bubbleOther}>
-                                            
-                                            {/* 3 Dots (Appears ON the message) */}
-                                            {showDots && (
-                                                <div style={styles.threeDots} onClick={(e) => handleDotsClick(e, m.id)}>•••</div>
-                                            )}
-
+                                            {showDots && <div style={styles.threeDots} onClick={(e) => handleDotsClick(e, m.id)}>•••</div>}
                                             {m.deleted ? <i style={{ opacity:0.7 }}>Message deleted</i> : 
                                             <>
                                                 {m.type === "image" && m.url && <img src={m.url} alt="" style={{ maxWidth:320, borderRadius:8, marginBottom: m.text ? 8 : 0 }} />}
@@ -671,7 +549,6 @@ export default function App() {
                                                 <div>{fmtTime(m.timestamp)}{isMine && !m.deleted && (m.read?" ✓✓":" ✓")}</div>
                                             </div>
                                         </div>
-
                                         {m.reactions && Object.keys(m.reactions).length > 0 && (
                                             <div style={{ display:"flex", gap:6, marginTop:6 }}>
                                                 {Object.entries(m.reactions).map(([emo, arr])=>(
