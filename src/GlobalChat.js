@@ -7,11 +7,11 @@ import {
     push,
     update, 
     off,
+    remove, // Added remove for permanent deletion
 } from "firebase/database";
 import { db } from "./firebase"; 
 
 /* ---------------- Constants ---------------- */
-// New official link for Global Chat photo
 const GLOBAL_CHAT_PHOTO_URL = "https://thumbs.dreamstime.com/z/unity-group-illustration-white-86095637.jpg";
 const nowTs = () => Date.now();
 
@@ -42,6 +42,8 @@ export default function GlobalChat({
     const [messages, setMessages] = useState([]);
     const [emojiOpen, setEmojiOpen] = useState(false);
     const [listening, setListening] = useState(false);
+    // Added state to track local-only deletions
+    const [localDeletedIds, setLocalDeletedIds] = useState([]);
     
     const globalChatRef = useRef(null);
     const recognitionRef = useRef(null);
@@ -123,6 +125,18 @@ export default function GlobalChat({
         rec.start();
     }
 
+    // New logic for handling local vs global delete
+    const handleInternalDelete = (msg) => {
+        const isMine = msg.sender === user.uid;
+        if (isMine) {
+            // Delete for everyone (Global)
+            deleteMessage(msg);
+        } else {
+            // Local delete only
+            setLocalDeletedIds(prev => [...prev, msg.id]);
+        }
+    };
+
     // --- FIX IMPLEMENTATION: Force the new image URL for the Global Chat ---
     const chatPhoto = selectedContact.id === "GLOBAL_CHAT_ID" 
         ? `https://thumbs.dreamstime.com/z/unity-group-illustration-white-86095637.jpg`
@@ -135,7 +149,6 @@ export default function GlobalChat({
             <div style={styles.chatHeader}>
                 <div style={{ display:"flex", alignItems:"center", gap:12 }}>
                     {window.innerWidth < 820 && <button onClick={onCloseChat} style={styles.smallBtn}>←</button>}
-                    {/* Image source now uses the calculated chatPhoto */}
                     <img src={chatPhoto} style={{ width:44, height:44, borderRadius:999 }} alt={`${selectedContact.name} profile`} />
                     <div>
                         <div style={{ fontWeight:700 }}>{selectedContact.name}</div>
@@ -151,7 +164,9 @@ export default function GlobalChat({
             </div>
 
             <div style={styles.chatBody}>
-                {messages.map(m => {
+                {messages
+                  .filter(m => !localDeletedIds.includes(m.id)) // Filter out locally deleted messages
+                  .map(m => {
                     const isMine = m.sender === user.uid;
                     const showDots = hoveredMessageId === m.id && activeMenuId !== m.id;
                     const showMenu = activeMenuId === m.id;
@@ -176,14 +191,14 @@ export default function GlobalChat({
                                     [isMine?"right":"left"]: "calc(0% + 100px)", 
                                     top: 0
                                 }}>
-                                    {/* Delete is available for all own messages */}
-                                    <div style={styles.menuItem} onClick={()=>deleteMessage(m)}>delete message 🗑️</div>
+                                    {/* Delete is available for all: handles global if mine, local if others */}
+                                    <div style={styles.menuItem} onClick={()=>handleInternalDelete(m)}>delete message 🗑️</div>
 
                                     {/* Edit is only available for own, non-deleted messages */}
                                     {isMine && !m.deleted && <div style={styles.menuItem} onClick={()=>editMessage(m)}>edit message ✎</div>}
                                     
-                                    {/* React is available for all messages */}
-                                    <div style={styles.menuItem} onClick={()=>toggleReaction(m, "👍")}>react message 👍</div>
+                                    {/* React is ONLY available for messages sent by OTHER users */}
+                                    {!isMine && <div style={styles.menuItem} onClick={()=>toggleReaction(m, "👍")}>react message 👍</div>}
                                 </div>
                             )}
 
