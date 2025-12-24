@@ -507,11 +507,11 @@ export default function App() {
                     <div style={styles.sectionTitle}>Users</div>
                     {usersList.filter(c => (c.name||"").toLowerCase().includes(searchQuery.toLowerCase())).map(contact => (
                         <div key={contact.id} style={styles.contactRow}>
-                            <div style={{ display:"flex", flex:1, gap:12, cursor:"pointer" }} onClick={async ()=>{ if (!isFriend(contact.id)) { await addFriend(contact.id); } openChat(contact); }}>
+                            <div style={{ display:"flex", flex:1, gap:12, cursor:"pointer" }} onClick={() => openChat(contact)}>
                                 <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name}`} style={{ width:46, height:46, borderRadius:999 }} alt={contact.name} />
                                 <div><div style={{ fontWeight:700 }}>{contact.name}</div><div style={{ fontSize:12, color:theme_palette.muted }}>{contact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[contact.id])}`}</div></div>
                             </div>
-                            <button title="Make Friend" onClick={async () => { await addFriend(contact.id); openChat(contact); }} style={styles.smallBtn}>➕</button>
+                            <button title="Make Friend" onClick={async (e) => { e.stopPropagation(); await addFriend(contact.id); }} style={styles.smallBtn}>👥</button>
                         </div>
                     ))}
                 </div>
