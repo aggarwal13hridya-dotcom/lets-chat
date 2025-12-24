@@ -13,6 +13,7 @@ import {
     update,
     remove,
     off,
+    get,
 } from "firebase/database";
 import { 
     ref as storageRef, 
@@ -60,10 +61,10 @@ const GLOBAL_CHAT_USER = {
 export default function App() {
     // core state
     const [user, setUser] = useState(null);
-    const [loading, setLoading] = useState(true); // NEW: Added to prevent Sign-In flash
+    const [loading, setLoading] = useState(true); 
     const [contactsAll, setContactsAll] = useState([]);
+    const [showRestorePrompt, setShowRestorePrompt] = useState(false); 
     
-    // PERSISTENCE CHANGE: Initialize state directly from LocalStorage so it exists BEFORE the first render.
     const [friendsMap, setFriendsMap] = useState(() => {
         const localData = localStorage.getItem("persistent_friends_list");
         return localData ? JSON.parse(localData) : {};
@@ -79,13 +80,11 @@ export default function App() {
     const [searchQuery, setSearchQuery] = useState("");
     const [typingStatus, setTypingStatus] = useState("");
     const [lastSeenMap, setLastSeenMap] = useState({});
-    const [lastMessageTimes, setLastMessageTimes] = useState({}); // Logic for sorting
+    const [lastMessageTimes, setLastMessageTimes] = useState({}); 
     
-    // --- STATE FOR ACTIONS ---
     const [hoveredMessageId, setHoveredMessageId] = useState(null); 
     const [activeMenuId, setActiveMenuId] = useState(null); 
 
-    // refs
     const messagesRefActive = useRef(null);
     const typingRefActive = useRef(null);
     const recognitionRef = useRef(null);
@@ -95,69 +94,156 @@ export default function App() {
 
     // ---------------- Auth & initial subscriptions ----------------
     useEffect(() => {
-        const unsub = onAuthStateChanged(auth, (u) => {
+        const unsub = onAuthStateChanged(auth, async (u) => {
             if (u) {
-                setUser(u);
-                const myRef = dbRef(db, `users/${u.uid}`);
-                set(myRef, { name: u.displayName || "", photo: u.photoURL || "", email: u.email || "", online: true, lastSeen: nowTs() }).catch(()=>{});
-
-                const usersRef = dbRef(db, "users");
-                onValue(usersRef, (snap) => {
-                    const raw = snap.val() || {};
-                    const arr = Object.keys(raw)
-                        .filter(k => k && k !== u.uid)
-                        .map(k => ({ id: k, ...raw[k] }));
-                    
-                    const merged = [GLOBAL_CHAT_USER, HA_USER, ...arr]; 
-                    setContactsAll(merged);
-
-                    const map = {};
-                    Object.keys(raw).forEach(k => { if (raw[k] && raw[k].lastSeen) map[k] = raw[k].lastSeen; });
-                    setLastSeenMap(map);
-                });
-
-                // Logic to track latest messages for sorting
-                const chatsRef = dbRef(db, `chats`);
-                onValue(chatsRef, (snap) => {
-                    const chats = snap.val() || {};
-                    const times = {};
-                    Object.keys(chats).forEach(chatId => {
-                        if (chatId.includes(u.uid)) {
-                            const otherId = chatId.replace(u.uid, "").replace("_", "");
-                            const msgs = chats[chatId].messages;
-                            if (msgs) {
-                                const msgList = Object.values(msgs);
-                                const lastTs = Math.max(...msgList.map(m => m.timestamp || 0));
-                                times[otherId] = lastTs;
-                            }
-                        }
-                    });
-                    setLastMessageTimes(times);
-                });
-
-                // PERSISTENCE CHANGE: Keep LocalStorage and Firebase in sync
-                const fRef = dbRef(db, `users/${u.uid}/friends`);
-                onValue(fRef, (snap) => {
-                    const data = snap.val() || {};
-                    if (Object.keys(data).length > 0 || snap.exists()) {
-                        setFriendsMap(data);
-                        localStorage.setItem("persistent_friends_list", JSON.stringify(data));
-                    }
-                });
-
+                const wasExplicitLogout = localStorage.getItem("explicit_logout_flag") === "true";
+                if (wasExplicitLogout) {
+                    setUser(u);
+                    setShowRestorePrompt(true);
+                } else {
+                    initUserSession(u);
+                }
             } else {
                 setUser(null);
                 setContactsAll([]);
                 setFriendsMap({});
                 setSelectedContact(null);
             }
-            setLoading(false); // NEW: Authentication check complete
+            setLoading(false); 
         });
 
         return () => unsub();
     }, []); 
 
-    // RESPONSIVE FIX
+    const initUserSession = (u) => {
+        setUser(u);
+        const myRef = dbRef(db, `users/${u.uid}`);
+        set(myRef, { name: u.displayName || "", photo: u.photoURL || "", email: u.email || "", online: true, lastSeen: nowTs() }).catch(()=>{});
+
+        const usersRef = dbRef(db, "users");
+        onValue(usersRef, (snap) => {
+            const raw = snap.val() || {};
+            const arr = Object.keys(raw)
+                .filter(k => k && k !== u.uid)
+                .map(k => ({ id: k, ...raw[k] }));
+            const merged = [GLOBAL_CHAT_USER, HA_USER, ...arr]; 
+            setContactsAll(merged);
+            const map = {};
+            Object.keys(raw).forEach(k => { if (raw[k] && raw[k].lastSeen) map[k] = raw[k].lastSeen; });
+            setLastSeenMap(map);
+        });
+
+        const chatsRef = dbRef(db, `chats`);
+        onValue(chatsRef, (snap) => {
+            const chats = snap.val() || {};
+            const times = {};
+            Object.keys(chats).forEach(chatId => {
+                if (chatId.includes(u.uid)) {
+                    const parts = chatId.split("_");
+                    const otherId = parts[0] === u.uid ? parts[1] : parts[0];
+                    const msgs = chats[chatId].messages;
+                    if (msgs) {
+                        const msgList = Object.values(msgs);
+                        const lastTs = Math.max(...msgList.map(m => m.timestamp || 0));
+                        times[otherId] = lastTs;
+                    }
+                }
+            });
+            setLastMessageTimes(times);
+        });
+
+        const fRef = dbRef(db, `users/${u.uid}/friends`);
+        onValue(fRef, (snap) => {
+            const data = snap.val() || {};
+            if (Object.keys(data).length > 0 || snap.exists()) {
+                setFriendsMap(data);
+                localStorage.setItem("persistent_friends_list", JSON.stringify(data));
+            }
+        });
+    }
+
+    const handleExplicitSignOut = async () => {
+        if (!user) return;
+        const myUid = user.uid;
+        localStorage.setItem("explicit_logout_flag", "true");
+
+        // Global Chat specific logic: Hide own messages for everyone
+        const globalSnap = await get(dbRef(db, `globalChat/messages`));
+        if (globalSnap.exists()) {
+            const msgs = globalSnap.val();
+            const updates = {};
+            Object.keys(msgs).forEach(mid => {
+                if (msgs[mid].sender === myUid) {
+                    updates[`globalChat/messages/${mid}/hidden`] = true;
+                }
+            });
+            if (Object.keys(updates).length > 0) await update(dbRef(db), updates);
+        }
+
+        const allUsersSnap = await get(dbRef(db, `users`));
+        if (allUsersSnap.exists()) {
+            const usersData = allUsersSnap.val();
+            const updates = {};
+            Object.keys(usersData).forEach(uid => {
+                if (usersData[uid].friends && usersData[uid].friends[myUid]) {
+                    updates[`users/${uid}/friends/${myUid}`] = null;
+                }
+            });
+            if (Object.keys(updates).length > 0) await update(dbRef(db), updates);
+        }
+        await remove(dbRef(db, `users/${myUid}`));
+        signOut(auth);
+    };
+
+    const handleRestoreData = async () => {
+        // Restore Global Chat messages
+        const globalSnap = await get(dbRef(db, `globalChat/messages`));
+        if (globalSnap.exists()) {
+            const msgs = globalSnap.val();
+            const updates = {};
+            Object.keys(msgs).forEach(mid => {
+                if (msgs[mid].sender === user.uid) {
+                    updates[`globalChat/messages/${mid}/hidden`] = null;
+                }
+            });
+            if (Object.keys(updates).length > 0) await update(dbRef(db), updates);
+        }
+
+        localStorage.removeItem("explicit_logout_flag");
+        setShowRestorePrompt(false);
+        initUserSession(user);
+    };
+
+    const handleStartFresh = async () => {
+        // Permanently delete own global messages for a fresh start
+        const globalSnap = await get(dbRef(db, `globalChat/messages`));
+        if (globalSnap.exists()) {
+            const msgs = globalSnap.val();
+            for (let mid in msgs) {
+                if (msgs[mid].sender === user.uid) {
+                    await remove(dbRef(db, `globalChat/messages/${mid}`));
+                }
+            }
+        }
+
+        localStorage.removeItem("explicit_logout_flag");
+        setShowRestorePrompt(false);
+        const chatsSnap = await get(dbRef(db, `chats`));
+        if (chatsSnap.exists()) {
+            const chats = chatsSnap.val();
+            for (let chatId in chats) {
+                if (chatId.includes(user.uid)) {
+                    await remove(dbRef(db, `chats/${chatId}`));
+                }
+            }
+        }
+        await remove(dbRef(db, `users/${user.uid}`));
+        localStorage.removeItem("persistent_friends_list");
+        setFriendsMap({});
+        initUserSession(user);
+    };
+
+    // ---------------- UI & Logic Helpers ----------------
     useEffect(() => {
         function onResize() {
             if (window.innerWidth < 820) {
@@ -171,25 +257,16 @@ export default function App() {
         return () => window.removeEventListener("resize", onResize);
     }, [selectedContact]);
 
-    // ---------------- Chat open ----------------
     function makeChatId(a,b) { if (!a||!b) return null; return a > b ? `${a}_${b}` : `${b}_${a}`; }
 
     function openChat(contact) {
         if (!user) return;
         if (messagesRefActive.current) off(messagesRefActive.current);
         if (typingRefActive.current) off(typingRefActive.current);
-        
         setSelectedContact(contact);
         setMessages([]); 
-
         if (window.innerWidth < 820) setSidebarVisible(false);
-
-        if (contact.isGlobal) {
-            setTypingStatus("");
-            setText(""); 
-            return;
-        }
-
+        if (contact.isGlobal) { setTypingStatus(""); setText(""); return; }
         const chatId = makeChatId(user.uid, contact.id);
         const msgsRef = dbRef(db, `chats/${chatId}/messages`);
         messagesRefActive.current = msgsRef;
@@ -204,7 +281,6 @@ export default function App() {
             });
             setTimeout(()=>messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 80);
         });
-
         const tRef = dbRef(db, `chats/${chatId}/typing`);
         typingRefActive.current = tRef;
         onValue(tRef, (snap) => {
@@ -215,39 +291,12 @@ export default function App() {
         });
     }
 
-    // ---------------- Action Logic ----------------
+    function handleMouseEnter(msgId) { if (window.matchMedia("(pointer: fine)").matches) setHoveredMessageId(msgId); }
+    function handleMouseLeave() { setHoveredMessageId(null); setActiveMenuId(null); }
+    function handleDotsClick(e, msgId) { e.stopPropagation(); setActiveMenuId(msgId); }
+    function handleTouchStart(msgId) { holdTimerRef.current = setTimeout(() => { setActiveMenuId(msgId); setHoveredMessageId(null); }, 2000); }
+    function handleTouchEnd() { if (holdTimerRef.current) { clearTimeout(holdTimerRef.current); holdTimerRef.current = null; } }
 
-    function handleMouseEnter(msgId) {
-        if (window.matchMedia("(pointer: fine)").matches) {
-            setHoveredMessageId(msgId);
-        }
-    }
-
-    function handleMouseLeave() {
-        setHoveredMessageId(null);
-        setActiveMenuId(null); 
-    }
-
-    function handleDotsClick(e, msgId) {
-        e.stopPropagation();
-        setActiveMenuId(msgId);
-    }
-
-    function handleTouchStart(msgId) {
-        holdTimerRef.current = setTimeout(() => {
-            setActiveMenuId(msgId);
-            setHoveredMessageId(null); 
-        }, 2000); 
-    }
-
-    function handleTouchEnd() {
-        if (holdTimerRef.current) {
-            clearTimeout(holdTimerRef.current);
-            holdTimerRef.current = null;
-        }
-    }
-
-    // ---------------- Friend functions ----------------
     async function addFriend(id) {
         if (!user) return;
         const newMap = { ...friendsMap, [id]: true };
@@ -267,27 +316,15 @@ export default function App() {
         await remove(dbRef(db, `users/${id}/friends/${user.uid}`));
     }
 
-    // ---------------- Messaging ----------------
     async function sendTextMessage(body) {
         if (!user || !selectedContact || selectedContact.isGlobal) return;
         const content = (body ?? text).trim();
         if (!content) return;
         const chatId = makeChatId(user.uid, selectedContact.id);
         const p = push(dbRef(db, `chats/${chatId}/messages`));
-        await set(p, {
-            sender: user.uid,
-            name: user.displayName,
-            text: content,
-            type: "text",
-            timestamp: nowTs(),
-            delivered:false, read:false, edited:false, deleted:false, reactions:{}
-        });
-        setText("");
-        updateTyping(false);
-
-        if (selectedContact.id === HA_USER.id) {
-            replyAsHaBot(chatId, content);
-        }
+        await set(p, { sender: user.uid, name: user.displayName, text: content, type: "text", timestamp: nowTs(), delivered:false, read:false, edited:false, deleted:false, reactions:{} });
+        setText(""); updateTyping(false);
+        if (selectedContact.id === HA_USER.id) replyAsHaBot(chatId, content);
     }
 
     function updateTyping(status) {
@@ -310,51 +347,29 @@ export default function App() {
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SR) return alert("Use Chrome");
         if (recognitionRef.current) { recognitionRef.current.stop(); recognitionRef.current=null; setListening(false); return; }
-        const rec = new SR();
-        rec.lang = "en-US";
+        const rec = new SR(); rec.lang = "en-US";
         rec.onstart = ()=>setListening(true);
         rec.onend = ()=>{ setListening(false); recognitionRef.current=null; };
-        rec.onresult = (ev) => {
-            const t = ev.results[0][0].transcript;
-            sendTextMessage(t);
-        };
-        recognitionRef.current = rec;
-        rec.start();
+        rec.onresult = (ev) => { const t = ev.results[0][0].transcript; sendTextMessage(t); };
+        recognitionRef.current = rec; rec.start();
     }
 
     async function uploadImageAndSend(file, u, receiverId, chatPath) {
         if (!u || !file) return;
         const isGlobal = receiverId === GLOBAL_CHAT_USER.id;
         const uploadFileName = `${u.uid}-${nowTs()}-${file.name}`;
-        const storagePath = isGlobal 
-            ? `global_chat_images/${uploadFileName}` 
-            : `chat_images/${makeChatId(u.uid, receiverId)}/${uploadFileName}`;
-
+        const storagePath = isGlobal ? `global_chat_images/${uploadFileName}` : `chat_images/${makeChatId(u.uid, receiverId)}/${uploadFileName}`;
         const sRef = storageRef(storage, storagePath);
         try {
             const snapshot = await uploadBytes(sRef, file);
             const url = await getDownloadURL(snapshot.ref);
             const p = push(dbRef(db, chatPath));
-            await set(p, {
-                sender: u.uid,
-                name: u.displayName,
-                photo: u.photoURL || `https://api.dicebear.com/6.x/initials/svg?seed=${u.displayName}`,
-                text: file.name,
-                type: "image",
-                url: url,
-                timestamp: nowTs(),
-                delivered: !isGlobal ? false : true,
-                read: true,
-                edited: false, deleted: false, reactions: {}
-            });
-        } catch (error) {
-            console.error("Image upload failed:", error);
-        }
+            await set(p, { sender: u.uid, name: u.displayName, photo: u.photoURL || `https://api.dicebear.com/6.x/initials/svg?seed=${u.displayName}`, text: file.name, type: "image", url: url, timestamp: nowTs(), delivered: !isGlobal ? false : true, read: true, edited: false, deleted: false, reactions: {} });
+        } catch (error) { console.error("Image upload failed:", error); }
     }
 
     function handleImageFileDM(e) {
-        const file = e.target.files?.[0];
-        e.target.value = null; 
+        const file = e.target.files?.[0]; e.target.value = null; 
         if (!file || !user || !selectedContact) return;
         const receiverId = selectedContact.id;
         const chatId = makeChatId(user.uid, receiverId);
@@ -363,20 +378,17 @@ export default function App() {
     }
 
     async function editMessage(msg) {
-        const nt = window.prompt("Edit:", msg.text);
-        if (nt == null) return;
+        const nt = window.prompt("Edit:", msg.text); if (nt == null) return;
         const id = selectedContact.isGlobal ? null : makeChatId(user.uid, selectedContact.id);
         const path = selectedContact.isGlobal ? `globalChat/messages/${msg.id}` : `chats/${id}/messages/${msg.id}`;
-        await update(dbRef(db, path), { text:nt, edited:true });
-        setActiveMenuId(null);
+        await update(dbRef(db, path), { text:nt, edited:true }); setActiveMenuId(null);
     }
 
     async function deleteMessage(msg) {
         if (!window.confirm("Delete for everyone?")) return;
         const id = selectedContact.isGlobal ? null : makeChatId(user.uid, selectedContact.id);
         const path = selectedContact.isGlobal ? `globalChat/messages/${msg.id}` : `chats/${id}/messages/${msg.id}`;
-        await update(dbRef(db, path), { text:"Message deleted", deleted:true });
-        setActiveMenuId(null);
+        await update(dbRef(db, path), { text:"Message deleted", deleted:true }); setActiveMenuId(null);
     }
 
     async function toggleReaction(msg, emoji) {
@@ -389,16 +401,10 @@ export default function App() {
         const has = arr.includes(user.uid);
         const next = has ? arr.filter(x=>x!==user.uid) : [...arr, user.uid];
         const nextObj = { ...reactions, [emoji]: next.length ? next : undefined };
-        await update(mRef, { reactions: nextObj });
-        setActiveMenuId(null);
+        await update(mRef, { reactions: nextObj }); setActiveMenuId(null);
     }
 
-    useEffect(()=>{
-        return () => {
-            if (messagesRefActive.current) off(messagesRefActive.current);
-            if (typingRefActive.current) off(typingRefActive.current);
-        };
-    }, []);
+    useEffect(()=>{ return () => { if (messagesRefActive.current) off(messagesRefActive.current); if (typingRefActive.current) off(typingRefActive.current); }; }, []);
 
     useEffect(()=>{
         if (!user) return;
@@ -408,11 +414,7 @@ export default function App() {
         return () => window.removeEventListener("beforeunload", onUnload);
     }, [user]);
 
-    useEffect(()=>{ 
-        if (!selectedContact?.isGlobal) { 
-            messagesEndRef.current?.scrollIntoView({ behavior:"smooth" }); 
-        }
-    }, [messages, selectedContact]);
+    useEffect(()=>{ if (!selectedContact?.isGlobal) { messagesEndRef.current?.scrollIntoView({ behavior:"smooth" }); } }, [messages, selectedContact]);
 
     // ---------------- Styles ----------------
     const theme_palette = theme === "dark"
@@ -421,19 +423,7 @@ export default function App() {
 
     const styles = {
         app: { display:"flex", height:"100vh", background:theme_palette.bg, color:theme_palette.text, fontFamily:"Segoe UI, Roboto, Arial", overflow:"hidden" },
-        sidebar: {
-            width: sidebarVisible ? (window.innerWidth < 820 ? '100%' : 320) : 0,
-            minWidth: sidebarVisible ? (window.innerWidth < 820 ? '100%' : 260) : 0,
-            transition: "width .22s",
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden",
-            position: window.innerWidth < 820 ? 'absolute' : 'relative',
-            zIndex: window.innerWidth < 820 ? 50 : 1,
-            height: "100vh",
-            background: theme_palette.sidebar,
-            borderRight: `1px solid ${theme_palette.tile}`
-        },
+        sidebar: { width: sidebarVisible ? (window.innerWidth < 820 ? '100%' : 320) : 0, minWidth: sidebarVisible ? (window.innerWidth < 820 ? '100%' : 260) : 0, transition: "width .22s", display: "flex", flexDirection: "column", overflow: "hidden", position: window.innerWidth < 820 ? 'absolute' : 'relative', zIndex: window.innerWidth < 820 ? 50 : 1, height: "100vh", background: theme_palette.sidebar, borderRight: `1px solid ${theme_palette.tile}` },
         header: { padding:14, display:"flex", justifyContent:"space-between", alignItems:"center", borderBottom:`1px solid ${theme_palette.tile}`, background:theme_palette.sidebar },
         logoWrap: { display:"flex", alignItems:"center", gap:10 },
         logoImg: { width:44, height:44, borderRadius:10 },
@@ -459,10 +449,7 @@ export default function App() {
     };
 
     const isFriend = id => !!friendsMap[id];
-
-    // NEW: Authentication splash prevention logic
     if (loading) return null; 
-
     if (!user) {
         return (
             <div style={{ ...styles.app, alignItems:"center", justifyContent:"center" }}>
@@ -470,23 +457,29 @@ export default function App() {
                     <img src="https://cdn-icons-png.flaticon.com/512/733/733585.png" alt="logo" style={{ width:120, height:120, marginBottom:12, borderRadius:18 }} />
                     <h1 style={{ margin:6 }}>Let's Chat</h1>
                     <p style={{ color: theme_palette.muted }}>Sign in to chat</p>
-                    <button onClick={()=>signInWithPopup(auth, provider)} style={{ padding:"10px 18px", borderRadius:12, background:theme_palette.accent, color:"#fff", border:"none", cursor:"pointer" }}>
-                        Sign in with Google
-                    </button>
+                    <button onClick={()=>signInWithPopup(auth, provider)} style={{ padding:"10px 18px", borderRadius:12, background:theme_palette.accent, color:"#fff", border:"none", cursor:"pointer" }}>Sign in with Google</button>
+                </div>
+            </div>
+        );
+    }
+
+    if (showRestorePrompt) {
+        return (
+            <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.85)", zIndex:999, display:"flex", alignItems:"center", justifyContent:"center", color:theme_palette.text }}>
+                <div style={{ background:theme_palette.sidebar, padding:32, borderRadius:16, textAlign:"center", maxWidth:400, border:`1px solid ${theme_palette.tile}` }}>
+                    <h2>Welcome Back!</h2>
+                    <p style={{ color:theme_palette.muted, margin:"15px 0 24px" }}>You signed out previously. How would you like to start this session?</p>
+                    <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                        <button onClick={handleRestoreData} style={{ background:theme_palette.accent, border:"none", padding:12, borderRadius:8, cursor:"pointer", fontWeight:600, color:"#000" }}>Continue Previous Account</button>
+                        <button onClick={handleStartFresh} style={{ background:"transparent", border:`1px solid ${theme_palette.muted}`, color:theme_palette.text, padding:12, borderRadius:8, cursor:"pointer" }}>Start Fresh (Wipe Past Data)</button>
+                    </div>
                 </div>
             </div>
         );
     }
 
     const usersWithoutSelf = contactsAll.filter(c => c.id !== user.uid && c.id !== HA_USER.id && c.id !== GLOBAL_CHAT_USER.id);
-    
-    // logic to sort by message time within each group
-    const sortByActivity = (a, b) => {
-        const timeA = lastMessageTimes[a.id] || 0;
-        const timeB = lastMessageTimes[b.id] || 0;
-        return timeB - timeA;
-    };
-
+    const sortByActivity = (a, b) => (lastMessageTimes[b.id] || 0) - (lastMessageTimes[a.id] || 0);
     const friendsList = usersWithoutSelf.filter(u => isFriend(u.id)).sort(sortByActivity);
     const usersList = usersWithoutSelf.filter(u => !isFriend(u.id)).sort(sortByActivity);
 
@@ -496,32 +489,25 @@ export default function App() {
                 <div style={styles.header}>
                     <div style={styles.logoWrap}>
                         <img src="https://cdn-icons-png.flaticon.com/512/733/733585.png" alt="logo" style={styles.logoImg} />
-                        <div>
-                            <div style={{ fontWeight:800 }}>{user.displayName}</div>
-                            <div style={{ fontSize:12, color:theme_palette.muted }}>{user.email}</div>
-                        </div>
+                        <div><div style={{ fontWeight:800 }}>{user.displayName}</div><div style={{ fontSize:12, color:theme_palette.muted }}>{user.email}</div></div>
                     </div>
                     <div style={{ display:"flex", gap:8 }}>
                         <button title="Toggle theme" onClick={()=>setTheme(p=>p==="light"?"dark":"light")} style={styles.smallBtn}>{theme==="dark"?"☀️":"🌙"}</button>
-                        <button title="Sign out" onClick={()=>signOut(auth)} style={styles.smallBtn}>⏻</button>
+                        <button title="Sign out" onClick={handleExplicitSignOut} style={styles.smallBtn}>⏻</button>
                     </div>
                 </div>
-
                 <input placeholder="Search contacts" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} style={styles.search} />
-
                 <div style={styles.contactsWrap}>
                     <div style={styles.sectionTitle}>Global Chat</div>
                     <div onClick={()=>openChat(GLOBAL_CHAT_USER)} style={{...styles.contactRow, background: selectedContact?.id === GLOBAL_CHAT_USER.id ? (theme==="dark"?"#121d20ff":"#eef6f3") : "transparent"}}>
                         <img src={GLOBAL_CHAT_USER.photo} style={{ width:46, height:46, borderRadius:999 }} alt="Global Chat" />
                         <div><div style={{ fontWeight:700 }}>{GLOBAL_CHAT_USER.name}</div><div style={{ fontSize:12, color:theme_palette.muted }}>Public Chat</div></div>
                     </div>
-
                     <div style={styles.sectionTitle}>HA Chat</div>
                     <div onClick={()=>openChat(HA_USER)} style={{...styles.contactRow, background: selectedContact?.id === HA_USER.id ? (theme==="dark"?"#121d20ff":"#eef6f3") : "transparent"}}>
                         <img src={HA_USER.photo} style={{ width:46, height:46, borderRadius:999 }} alt="HA" />
                         <div><div style={{ fontWeight:700 }}>{HA_USER.name}</div><div style={{ fontSize:12, color:theme_palette.muted }}>AI Assistant</div></div>
                     </div>
-
                     <div style={styles.sectionTitle}>Friends</div>
                     {friendsList.length === 0 && <div style={{ padding:"8px 14px", color:theme_palette.muted }}>No friends yet</div>}
                     {friendsList.filter(c => (c.name||"").toLowerCase().includes(searchQuery.toLowerCase())).map(contact => (
@@ -531,7 +517,6 @@ export default function App() {
                             <button title="Remove friend" onClick={e=>{e.stopPropagation(); removeFriend(contact.id);}} style={styles.smallBtn}>🗑</button>
                         </div>
                     ))}
-
                     <div style={styles.sectionTitle}>Users</div>
                     {usersList.filter(c => (c.name||"").toLowerCase().includes(searchQuery.toLowerCase())).map(contact => (
                         <div key={contact.id} style={styles.contactRow}>
@@ -539,25 +524,14 @@ export default function App() {
                                 <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name}`} style={{ width:46, height:46, borderRadius:999 }} alt={contact.name} />
                                 <div><div style={{ fontWeight:700 }}>{contact.name}</div><div style={{ fontSize:12, color:theme_palette.muted }}>{contact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[contact.id])}`}</div></div>
                             </div>
-                            <button title="Make Friend" onClick={async (e) => { e.stopPropagation(); await addFriend(contact.id); }} style={styles.smallBtn}>👥</button>
+                            <button title="Make Friend" onClick={async (e) => { e.stopPropagation(); await addFriend(contact.id); }} style={styles.smallBtn}>➕</button>
                         </div>
                     ))}
                 </div>
             </div>
-
             {selectedContact ? (
                 selectedContact.isGlobal ? (
-                    <GlobalChat 
-                        user={user} palette={theme_palette} styles={styles} text={text} setText={setText}
-                        messagesEndRef={messagesEndRef} EMOJIS={EMOJIS} selectedContact={selectedContact}
-                        onCloseChat={() => { setSelectedContact(null); if (window.innerWidth < 820) setSidebarVisible(true); }}
-                        uploadImageAndSend={uploadImageAndSend} hoveredMessageId={hoveredMessageId}
-                        activeMenuId={activeMenuId} handleMouseEnter={handleMouseEnter}
-                        handleMouseLeave={handleMouseLeave} handleDotsClick={handleDotsClick}
-                        handleTouchStart={handleTouchStart} handleTouchEnd={handleTouchEnd}
-                        deleteMessage={deleteMessage} editMessage={editMessage}
-                        toggleReaction={toggleReaction} fmtTime={fmtTime}
-                    />
+                    <GlobalChat user={user} palette={theme_palette} styles={styles} text={text} setText={setText} messagesEndRef={messagesEndRef} EMOJIS={EMOJIS} selectedContact={selectedContact} onCloseChat={() => { setSelectedContact(null); if (window.innerWidth < 820) setSidebarVisible(true); }} uploadImageAndSend={uploadImageAndSend} hoveredMessageId={hoveredMessageId} activeMenuId={activeMenuId} handleMouseEnter={handleMouseEnter} handleMouseLeave={handleMouseLeave} handleDotsClick={handleDotsClick} handleTouchStart={handleTouchStart} handleTouchEnd={handleTouchEnd} deleteMessage={deleteMessage} editMessage={editMessage} toggleReaction={toggleReaction} fmtTime={fmtTime} />
                 ) : (
                     <div style={styles.chatArea}>
                         <div style={styles.chatHeader}>
@@ -568,52 +542,25 @@ export default function App() {
                             </div>
                             <div style={{ display:"flex", gap:8 }}><label style={{cursor:"pointer"}}>📎<input type="file" accept="image/*" onChange={handleImageFileDM} style={{display:"none"}}/></label></div>
                         </div>
-
                         <div style={styles.chatBody}>
                             {messages.map(m => {
-                                const isMine = m.sender === user.uid;
-                                const showDots = hoveredMessageId === m.id && activeMenuId !== m.id;
-                                const showMenu = activeMenuId === m.id;
+                                const isMine = m.sender === user.uid; const showDots = hoveredMessageId === m.id && activeMenuId !== m.id; const showMenu = activeMenuId === m.id;
                                 return (
                                     <div key={m.id} style={{...styles.messageRow, alignItems: isMine ? "flex-end" : "flex-start"}} onMouseEnter={() => handleMouseEnter(m.id)} onMouseLeave={handleMouseLeave} onTouchStart={() => handleTouchStart(m.id)} onTouchEnd={handleTouchEnd}>
-                                        {showMenu && (
-                                            <div style={{ ...styles.actionMenu, [isMine?"right":"left"]: "calc(0% + 100px)", top: 0 }}>
-                                                <div style={styles.menuItem} onClick={()=>deleteMessage(m)}>delete message 🗑️</div>
-                                                {isMine && !m.deleted && <div style={styles.menuItem} onClick={()=>editMessage(m)}>edit message ✎</div>}
-                                                <div style={styles.menuItem} onClick={()=>toggleReaction(m, "👍")}>react message 👍</div>
-                                            </div>
-                                        )}
+                                        {showMenu && (<div style={{ ...styles.actionMenu, [isMine?"right":"left"]: "calc(0% + 100px)", top: 0 }}><div style={styles.menuItem} onClick={()=>deleteMessage(m)}>delete message 🗑️</div>{isMine && !m.deleted && <div style={styles.menuItem} onClick={()=>editMessage(m)}>edit message ✎</div>}<div style={styles.menuItem} onClick={()=>toggleReaction(m, "👍")}>react message 👍</div></div>)}
                                         <div style={isMine ? styles.bubbleMine : styles.bubbleOther}>
                                             {showDots && <div style={styles.threeDots} onClick={(e) => handleDotsClick(e, m.id)}>•••</div>}
-                                            {m.deleted ? <i style={{ opacity:0.7 }}>Message deleted</i> : 
-                                            <>
-                                                {m.type === "image" && m.url && <img src={m.url} alt="" style={{ maxWidth:320, borderRadius:8, marginBottom: m.text ? 8 : 0 }} />}
-                                                <div style={{ whiteSpace:"pre-wrap" }}>{m.text}{m.edited?" · (edited)":""}</div>
-                                            </>}
-                                            <div style={styles.metaSmall}>
-                                                <div>{fmtTime(m.timestamp)}{isMine && !m.deleted && (m.read?" ✓✓":" ✓")}</div>
-                                            </div>
+                                            {m.deleted ? <i style={{ opacity:0.7 }}>Message deleted</i> : <>{m.type === "image" && m.url && <img src={m.url} alt="" style={{ maxWidth:320, borderRadius:8, marginBottom: m.text ? 8 : 0 }} />}<div style={{ whiteSpace:"pre-wrap" }}>{m.text}{m.edited?" · (edited)":""}</div></>}
+                                            <div style={styles.metaSmall}><div>{fmtTime(m.timestamp)}{isMine && !m.deleted && (m.read?" ✓✓":" ✓")}</div></div>
                                         </div>
-                                        {m.reactions && Object.keys(m.reactions).length > 0 && (
-                                            <div style={{ display:"flex", gap:6, marginTop:6 }}>
-                                                {Object.entries(m.reactions).map(([emo, arr])=>(
-                                                    <div key={emo} style={{ background:theme_palette.tile, padding:"4px 8px", borderRadius:12 }}>{emo} <small style={{ color:theme_palette.muted }}>{arr.length}</small></div>
-                                                ))}
-                                            </div>
-                                        )}
+                                        {m.reactions && Object.keys(m.reactions).length > 0 && (<div style={{ display:"flex", gap:6, marginTop:6 }}>{Object.entries(m.reactions).map(([emo, arr])=>(<div key={emo} style={{ background:theme_palette.tile, padding:"4px 8px", borderRadius:12 }}>{emo} <small style={{ color:theme_palette.muted }}>{arr.length}</small></div>))}</div>)}
                                     </div>
                                 );
                             })}
                             <div ref={messagesEndRef} />
                             {typingStatus && <div style={{ fontSize:13, color:theme_palette.muted, paddingLeft:10 }}>{typingStatus}</div>}
                         </div>
-
-                        {emojiOpen && (
-                            <div style={styles.emojiBox}>
-                                {EMOJIS.map(e=>(<button key={e} onClick={()=>{ setText(t=>t+e); setEmojiOpen(false); }} style={{ fontSize:18, background:"transparent", border:"none", cursor:"pointer" }}>{e}</button>))}
-                            </div>
-                        )}
-                        
+                        {emojiOpen && (<div style={styles.emojiBox}>{EMOJIS.map(e=>(<button key={e} onClick={()=>{ setText(t=>t+e); setEmojiOpen(false); }} style={{ fontSize:18, background:"transparent", border:"none", cursor:"pointer" }}>{e}</button>))}</div>)}
                         <div style={styles.footer}>
                             <button onClick={()=>setEmojiOpen(o=>!o)} style={styles.smallBtn}>😊</button>
                             <input placeholder={`Type a message to ${selectedContact.name}`} value={text} onChange={handleTypingChange} onKeyDown={(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendTextMessage(); } }} style={styles.input} />
@@ -622,13 +569,7 @@ export default function App() {
                         </div>
                     </div>
                 )
-            ) : (
-                <div style={{ ...styles.chatArea, justifyContent:"center", alignItems:"center" }}>
-                    <div style={{ textAlign:"center" }}>
-                        <h2 style={{ color:theme_palette.muted }}>Select a Contact to begin messaging</h2>
-                    </div>
-                </div>
-            )}
+            ) : (<div style={{ ...styles.chatArea, justifyContent:"center", alignItems:"center" }}><div style={{ textAlign:"center" }}><h2 style={{ color:theme_palette.muted }}>Select a Contact to begin messaging</h2></div></div>)}
         </div>
     );
 }
