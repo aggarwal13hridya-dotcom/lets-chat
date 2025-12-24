@@ -79,6 +79,7 @@ export default function App() {
     const [searchQuery, setSearchQuery] = useState("");
     const [typingStatus, setTypingStatus] = useState("");
     const [lastSeenMap, setLastSeenMap] = useState({});
+    const [lastMessageTimes, setLastMessageTimes] = useState({}); // Logic for sorting
     
     // --- STATE FOR ACTIONS ---
     const [hoveredMessageId, setHoveredMessageId] = useState(null); 
@@ -113,6 +114,25 @@ export default function App() {
                     const map = {};
                     Object.keys(raw).forEach(k => { if (raw[k] && raw[k].lastSeen) map[k] = raw[k].lastSeen; });
                     setLastSeenMap(map);
+                });
+
+                // Logic to track latest messages for sorting
+                const chatsRef = dbRef(db, `chats`);
+                onValue(chatsRef, (snap) => {
+                    const chats = snap.val() || {};
+                    const times = {};
+                    Object.keys(chats).forEach(chatId => {
+                        if (chatId.includes(u.uid)) {
+                            const otherId = chatId.replace(u.uid, "").replace("_", "");
+                            const msgs = chats[chatId].messages;
+                            if (msgs) {
+                                const msgList = Object.values(msgs);
+                                const lastTs = Math.max(...msgList.map(m => m.timestamp || 0));
+                                times[otherId] = lastTs;
+                            }
+                        }
+                    });
+                    setLastMessageTimes(times);
                 });
 
                 // PERSISTENCE CHANGE: Keep LocalStorage and Firebase in sync
@@ -459,8 +479,16 @@ export default function App() {
     }
 
     const usersWithoutSelf = contactsAll.filter(c => c.id !== user.uid && c.id !== HA_USER.id && c.id !== GLOBAL_CHAT_USER.id);
-    const friendsList = usersWithoutSelf.filter(u => isFriend(u.id));
-    const usersList = usersWithoutSelf.filter(u => !isFriend(u.id));
+    
+    // logic to sort by message time within each group
+    const sortByActivity = (a, b) => {
+        const timeA = lastMessageTimes[a.id] || 0;
+        const timeB = lastMessageTimes[b.id] || 0;
+        return timeB - timeA;
+    };
+
+    const friendsList = usersWithoutSelf.filter(u => isFriend(u.id)).sort(sortByActivity);
+    const usersList = usersWithoutSelf.filter(u => !isFriend(u.id)).sort(sortByActivity);
 
     return (
         <div style={styles.app}>
