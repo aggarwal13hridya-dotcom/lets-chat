@@ -162,12 +162,13 @@ export default function App() {
         });
     }
 
+    // UPDATED: IMMEDIATE GLOBAL CHAT HIDING LOGIC
     const handleExplicitSignOut = async () => {
         if (!user) return;
         const myUid = user.uid;
         localStorage.setItem("explicit_logout_flag", "true");
 
-        // Global Chat specific logic: Hide own messages for everyone
+        // 1. Immediately hide all own global messages for everyone
         const globalSnap = await get(dbRef(db, `globalChat/messages`));
         if (globalSnap.exists()) {
             const msgs = globalSnap.val();
@@ -180,6 +181,7 @@ export default function App() {
             if (Object.keys(updates).length > 0) await update(dbRef(db), updates);
         }
 
+        // 2. Standard logout cleanup
         const allUsersSnap = await get(dbRef(db, `users`));
         if (allUsersSnap.exists()) {
             const usersData = allUsersSnap.val();
@@ -195,8 +197,9 @@ export default function App() {
         signOut(auth);
     };
 
+    // UPDATED: IMMEDIATE RESTORATION LOGIC
     const handleRestoreData = async () => {
-        // Restore Global Chat messages
+        // 1. Instantly un-hide all own global messages for everyone
         const globalSnap = await get(dbRef(db, `globalChat/messages`));
         if (globalSnap.exists()) {
             const msgs = globalSnap.val();
@@ -215,7 +218,7 @@ export default function App() {
     };
 
     const handleStartFresh = async () => {
-        // Permanently delete own global messages for a fresh start
+        // Permanently delete global messages if user wants a fresh start
         const globalSnap = await get(dbRef(db, `globalChat/messages`));
         if (globalSnap.exists()) {
             const msgs = globalSnap.val();
@@ -524,7 +527,7 @@ export default function App() {
                                 <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name}`} style={{ width:46, height:46, borderRadius:999 }} alt={contact.name} />
                                 <div><div style={{ fontWeight:700 }}>{contact.name}</div><div style={{ fontSize:12, color:theme_palette.muted }}>{contact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[contact.id])}`}</div></div>
                             </div>
-                            <button title="Make Friend" onClick={async (e) => { e.stopPropagation(); await addFriend(contact.id); }} style={styles.smallBtn}>➕</button>
+                            <button title="Make Friend" onClick={async (e) => { e.stopPropagation(); await addFriend(contact.id); }} style={styles.smallBtn}>👥</button>
                         </div>
                     ))}
                 </div>
