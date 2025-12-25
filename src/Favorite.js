@@ -1,25 +1,50 @@
-// src/GlobalChat.js
+// src/Favorite.js
 import React, { useEffect, useRef, useState } from "react";
-import { ref as dbRef, onValue, set, push, update, off, remove } from "firebase/database";
+import { ref as dbRef, onValue, off } from "firebase/database";
 import { db } from "./firebase"; 
 
-const GLOBAL_CHAT_PHOTO_URL = "https://thumbs.dreamstime.com/z/unity-group-illustration-white-86095637.jpg";
-const nowTs = () => Date.now();
-
-export default function GlobalChat({ 
-    user, palette, styles, text, setText, messagesEndRef, EMOJIS, selectedContact, onCloseChat, uploadImageAndSend, hoveredMessageId, activeMenuId, handleMouseEnter, handleMouseLeave, handleDotsClick, handleTouchStart, handleTouchEnd, deleteMessage, editMessage, toggleReaction, fmtTime
+export default function Favorite({ 
+    user, 
+    palette, 
+    styles, 
+    text, 
+    setText, 
+    messagesEndRef, 
+    EMOJIS,
+    selectedContact,
+    onCloseChat,
+    friendsMap, 
+    hoveredMessageId,
+    activeMenuId,
+    handleMouseEnter,
+    handleMouseLeave,
+    handleDotsClick,
+    handleTouchStart,
+    handleTouchEnd,
+    deleteMessage,
+    editMessage,
+    toggleReaction,
+    fmtTime,
+    sendTextMessage,
+    handleImageFile,
+    startVoiceToText,
+    listening,
+    emojiOpen,
+    setEmojiOpen
 }) {
     const [messages, setMessages] = useState([]);
-    const [emojiOpen, setEmojiOpen] = useState(false);
-    const [listening, setListening] = useState(false);
     const [localDeletedIds, setLocalDeletedIds] = useState([]);
-    const globalChatRef = useRef(null);
-    const recognitionRef = useRef(null);
+    const favoriteRef = useRef(null);
 
     useEffect(() => {
-        if (!user || !selectedContact || selectedContact.id !== "GLOBAL_CHAT_ID") { setMessages([]); return; }
-        const chatRef = dbRef(db, `globalChat/messages`);
-        globalChatRef.current = chatRef;
+        if (!user || !selectedContact || selectedContact.id !== "FAVORITES_ID") {
+             setMessages([]);
+             return;
+        }
+        
+        const chatRef = dbRef(db, `favoritesChat/messages`);
+        favoriteRef.current = chatRef;
+
         const handleValue = (snap) => {
             const raw = snap.val() || {};
             const arr = Object.entries(raw).map(([id, v]) => ({ id, ...v }));
@@ -27,77 +52,38 @@ export default function GlobalChat({
             setMessages(arr);
             setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 80);
         };
+
         onValue(chatRef, handleValue);
-        return () => { if (globalChatRef.current) off(globalChatRef.current, 'value', handleValue); };
+        return () => { if (favoriteRef.current) off(favoriteRef.current, 'value', handleValue); };
     }, [user, selectedContact, messagesEndRef]);
-
-    async function sendTextMessage(body) {
-        if (!user) return;
-        const content = (body ?? text).trim(); 
-        if (!content) return;
-
-        const msgData = {
-            sender: user.uid,
-            name: user.displayName, 
-            photo: user.photoURL || `https://api.dicebear.com/6.x/initials/svg?seed=${user.displayName}`,
-            text: content,
-            type: "text",
-            timestamp: nowTs(),
-            read: true, 
-            delivered: true, 
-        };
-
-        await set(push(dbRef(db, `globalChat/messages`)), msgData);
-        await set(push(dbRef(db, `favoritesChat/messages`)), msgData);
-        setText("");
-    }
-    
-    async function handleImageFile(e) {
-        const file = e.target.files[0];
-        e.target.value = null; 
-        if (!file || !user || !uploadImageAndSend) return;
-        await uploadImageAndSend(file, user, "GLOBAL_CHAT_ID", `globalChat/messages`); 
-        await uploadImageAndSend(file, user, "FAVORITES_ID", `favoritesChat/messages`); 
-    }
-
-    function startVoiceToText() {
-        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SR) return alert("Speech Recognition not supported.");
-        if (recognitionRef.current) { recognitionRef.current.stop(); recognitionRef.current = null; setListening(false); return; }
-        const rec = new SR();
-        rec.lang = "en-US";
-        rec.onstart = ()=>setListening(true);
-        rec.onend = ()=>{ setListening(false); recognitionRef.current = null; };
-        rec.onresult = (ev) => sendTextMessage(ev.results[0][0].transcript);
-        recognitionRef.current = rec;
-        rec.start();
-    }
 
     const handleInternalDelete = (msg) => {
         if (msg.sender === user.uid) deleteMessage(msg);
         else setLocalDeletedIds(prev => [...prev, msg.id]);
     };
 
-    const chatPhoto = selectedContact.id === "GLOBAL_CHAT_ID" ? GLOBAL_CHAT_PHOTO_URL : selectedContact.photo;
-
     return (
         <div style={styles.chatArea}>
             <div style={styles.chatHeader}>
                 <div style={{ display:"flex", alignItems:"center", gap:12 }}>
                     {window.innerWidth < 820 && <button onClick={onCloseChat} style={styles.smallBtn}>←</button>}
-                    <img src={chatPhoto} style={{ width:44, height:44, borderRadius:999 }} alt="" />
+                    <img src={selectedContact.photo} style={{ width:44, height:44, borderRadius:999 }} alt="Favorites" />
                     <div>
                         <div style={{ fontWeight:700 }}>{selectedContact.name}</div>
-                        <div style={{ fontSize:12, color:palette.muted }}>Public Chat</div>
+                        <div style={{ fontSize:12, color:palette.muted }}>Friends Only Feed</div>
                     </div>
                 </div>
-                <div style={{ display:"flex", gap:8 }}><label>📎<input type="file" accept="image/*" onChange={handleImageFile} style={{display:"none"}}/></label></div>
             </div>
+
             <div style={styles.chatBody}>
-                {messages.filter(m => !localDeletedIds.includes(m.id)).map(m => {
+                {messages
+                  .filter(m => !localDeletedIds.includes(m.id))
+                  .filter(m => m.sender === user.uid || !!friendsMap[m.sender])
+                  .map(m => {
                     const isMine = m.sender === user.uid;
                     const showDots = hoveredMessageId === m.id && activeMenuId !== m.id;
                     const showMenu = activeMenuId === m.id;
+
                     return (
                         <div key={m.id} style={{...styles.messageRow, alignItems: isMine ? "flex-end" : "flex-start"}} onMouseEnter={() => handleMouseEnter(m.id)} onMouseLeave={handleMouseLeave} onTouchStart={() => handleTouchStart(m.id)} onTouchEnd={handleTouchEnd}>
                             <div style={{ fontWeight: 700, fontSize: 12, color: isMine ? palette.accent : palette.muted, marginBottom: 4 }}>{isMine ? "You" : m.name}</div>
@@ -122,14 +108,16 @@ export default function GlobalChat({
                 })}
                 <div ref={messagesEndRef} />
             </div>
+
             {emojiOpen && (
                 <div style={styles.emojiBox}>
                     {EMOJIS.map(e=>(<button key={e} onClick={()=>{ setText(t=>t+e); setEmojiOpen(false); }} style={{ fontSize:18, background:"transparent", border:"none", cursor:"pointer" }}>{e}</button>))}
                 </div>
             )}
+            
             <div style={styles.footer}>
                 <button onClick={()=>setEmojiOpen(o=>!o)} style={styles.smallBtn}>😊</button>
-                <input placeholder="Type a message" value={text} onChange={e => setText(e.target.value)} onKeyDown={(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendTextMessage(); } }} style={styles.input} />
+                <input placeholder="Post to Favorites" value={text} onChange={e => setText(e.target.value)} onKeyDown={(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendTextMessage(); } }} style={styles.input} />
                 <button onClick={startVoiceToText} style={{ ...styles.roundBtn, background:listening?"#c0392b":palette.accent }}>{listening?"⏹":"🎤"}</button>
                 <button onClick={()=>sendTextMessage()} style={styles.roundBtn}>➤</button>
             </div>

@@ -1,28 +1,13 @@
 // src/App.js
 import React, { useEffect, useRef, useState } from "react";
-import {
-    signInWithPopup,
-    onAuthStateChanged,
-    signOut,
-} from "firebase/auth";
-import {
-    ref as dbRef,
-    onValue,
-    set,
-    push,
-    update,
-    remove,
-    off,
-    get,
-} from "firebase/database";
-import { 
-    ref as storageRef, 
-    uploadBytes, 
-    getDownloadURL 
-} from "firebase/storage";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { ref as dbRef, onValue, set, push, update, remove, off, get } from "firebase/database";
+import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 import { auth, db, storage, provider } from "./firebase";
 import { HA_USER, replyAsHaBot } from "./HAchat"; 
 import GlobalChat from "./GlobalChat";
+import SignIn from "./SignIn"; 
+import Favorite from "./Favorite"; // New Import
 
 /* ---------------- Helpers & Constants ---------------- */
 const EMOJIS = [
@@ -49,7 +34,6 @@ function timeAgo(ts) {
     return new Date(ts).toLocaleDateString();
 }
 
-// UPDATED GLOBAL CHAT PHOTO
 const GLOBAL_CHAT_USER = {
     id: "GLOBAL_CHAT_ID",
     name: "Global Chat",
@@ -57,14 +41,18 @@ const GLOBAL_CHAT_USER = {
     isGlobal: true,
 };
 
-/* ---------------- App ---------------- */
+const FAVORITES_USER = {
+    id: "FAVORITES_ID",
+    name: "Favorites",
+    photo: "https://cdn-icons-png.flaticon.com/512/1828/1828884.png",
+    isFavorite: true,
+};
+
 export default function App() {
-    // core state
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true); 
     const [contactsAll, setContactsAll] = useState([]);
     const [showRestorePrompt, setShowRestorePrompt] = useState(false); 
-    
     const [friendsMap, setFriendsMap] = useState(() => {
         const localData = localStorage.getItem("persistent_friends_list");
         return localData ? JSON.parse(localData) : {};
@@ -81,7 +69,6 @@ export default function App() {
     const [typingStatus, setTypingStatus] = useState("");
     const [lastSeenMap, setLastSeenMap] = useState({});
     const [lastMessageTimes, setLastMessageTimes] = useState({}); 
-    
     const [hoveredMessageId, setHoveredMessageId] = useState(null); 
     const [activeMenuId, setActiveMenuId] = useState(null); 
 
@@ -92,7 +79,6 @@ export default function App() {
     const typingTimerRef = useRef(null);
     const holdTimerRef = useRef(null); 
 
-    // ---------------- Auth & initial subscriptions ----------------
     useEffect(() => {
         const unsub = onAuthStateChanged(auth, async (u) => {
             if (u) {
@@ -111,7 +97,6 @@ export default function App() {
             }
             setLoading(false); 
         });
-
         return () => unsub();
     }, []); 
 
@@ -123,10 +108,8 @@ export default function App() {
         const usersRef = dbRef(db, "users");
         onValue(usersRef, (snap) => {
             const raw = snap.val() || {};
-            const arr = Object.keys(raw)
-                .filter(k => k && k !== u.uid)
-                .map(k => ({ id: k, ...raw[k] }));
-            const merged = [GLOBAL_CHAT_USER, HA_USER, ...arr]; 
+            const arr = Object.keys(raw).filter(k => k && k !== u.uid).map(k => ({ id: k, ...raw[k] }));
+            const merged = [GLOBAL_CHAT_USER, FAVORITES_USER, HA_USER, ...arr]; 
             setContactsAll(merged);
             const map = {};
             Object.keys(raw).forEach(k => { if (raw[k] && raw[k].lastSeen) map[k] = raw[k].lastSeen; });
@@ -162,83 +145,53 @@ export default function App() {
         });
     }
 
-    // UPDATED: IMMEDIATE GLOBAL CHAT HIDING LOGIC
     const handleExplicitSignOut = async () => {
         if (!user) return;
         const myUid = user.uid;
         localStorage.setItem("explicit_logout_flag", "true");
-
-        // 1. Immediately hide all own global messages for everyone
         const globalSnap = await get(dbRef(db, `globalChat/messages`));
         if (globalSnap.exists()) {
             const msgs = globalSnap.val();
             const updates = {};
-            Object.keys(msgs).forEach(mid => {
-                if (msgs[mid].sender === myUid) {
-                    updates[`globalChat/messages/${mid}/hidden`] = true;
-                }
-            });
+            Object.keys(msgs).forEach(mid => { if (msgs[mid].sender === myUid) updates[`globalChat/messages/${mid}/hidden`] = true; });
             if (Object.keys(updates).length > 0) await update(dbRef(db), updates);
         }
-
-        // 2. Standard logout cleanup
         const allUsersSnap = await get(dbRef(db, `users`));
         if (allUsersSnap.exists()) {
             const usersData = allUsersSnap.val();
             const updates = {};
-            Object.keys(usersData).forEach(uid => {
-                if (usersData[uid].friends && usersData[uid].friends[myUid]) {
-                    updates[`users/${uid}/friends/${myUid}`] = null;
-                }
-            });
+            Object.keys(usersData).forEach(uid => { if (usersData[uid].friends && usersData[uid].friends[myUid]) updates[`users/${uid}/friends/${myUid}`] = null; });
             if (Object.keys(updates).length > 0) await update(dbRef(db), updates);
         }
         await remove(dbRef(db, `users/${myUid}`));
         signOut(auth);
     };
 
-    // UPDATED: IMMEDIATE RESTORATION LOGIC
     const handleRestoreData = async () => {
-        // 1. Instantly un-hide all own global messages for everyone
         const globalSnap = await get(dbRef(db, `globalChat/messages`));
         if (globalSnap.exists()) {
             const msgs = globalSnap.val();
             const updates = {};
-            Object.keys(msgs).forEach(mid => {
-                if (msgs[mid].sender === user.uid) {
-                    updates[`globalChat/messages/${mid}/hidden`] = null;
-                }
-            });
+            Object.keys(msgs).forEach(mid => { if (msgs[mid].sender === user.uid) updates[`globalChat/messages/${mid}/hidden`] = null; });
             if (Object.keys(updates).length > 0) await update(dbRef(db), updates);
         }
-
         localStorage.removeItem("explicit_logout_flag");
         setShowRestorePrompt(false);
         initUserSession(user);
     };
 
     const handleStartFresh = async () => {
-        // Permanently delete global messages if user wants a fresh start
         const globalSnap = await get(dbRef(db, `globalChat/messages`));
         if (globalSnap.exists()) {
             const msgs = globalSnap.val();
-            for (let mid in msgs) {
-                if (msgs[mid].sender === user.uid) {
-                    await remove(dbRef(db, `globalChat/messages/${mid}`));
-                }
-            }
+            for (let mid in msgs) { if (msgs[mid].sender === user.uid) await remove(dbRef(db, `globalChat/messages/${mid}`)); }
         }
-
         localStorage.removeItem("explicit_logout_flag");
         setShowRestorePrompt(false);
         const chatsSnap = await get(dbRef(db, `chats`));
         if (chatsSnap.exists()) {
             const chats = chatsSnap.val();
-            for (let chatId in chats) {
-                if (chatId.includes(user.uid)) {
-                    await remove(dbRef(db, `chats/${chatId}`));
-                }
-            }
+            for (let chatId in chats) { if (chatId.includes(user.uid)) await remove(dbRef(db, `chats/${chatId}`)); }
         }
         await remove(dbRef(db, `users/${user.uid}`));
         localStorage.removeItem("persistent_friends_list");
@@ -246,15 +199,8 @@ export default function App() {
         initUserSession(user);
     };
 
-    // ---------------- UI & Logic Helpers ----------------
     useEffect(() => {
-        function onResize() {
-            if (window.innerWidth < 820) {
-                setSidebarVisible(!selectedContact);
-            } else {
-                setSidebarVisible(true);
-            }
-        }
+        function onResize() { if (window.innerWidth < 820) setSidebarVisible(!selectedContact); else setSidebarVisible(true); }
         window.addEventListener("resize", onResize);
         onResize(); 
         return () => window.removeEventListener("resize", onResize);
@@ -269,7 +215,7 @@ export default function App() {
         setSelectedContact(contact);
         setMessages([]); 
         if (window.innerWidth < 820) setSidebarVisible(false);
-        if (contact.isGlobal) { setTypingStatus(""); setText(""); return; }
+        if (contact.isGlobal || contact.isFavorite) { setTypingStatus(""); setText(""); return; }
         const chatId = makeChatId(user.uid, contact.id);
         const msgsRef = dbRef(db, `chats/${chatId}/messages`);
         messagesRefActive.current = msgsRef;
@@ -320,7 +266,7 @@ export default function App() {
     }
 
     async function sendTextMessage(body) {
-        if (!user || !selectedContact || selectedContact.isGlobal) return;
+        if (!user || !selectedContact || selectedContact.isGlobal || selectedContact.isFavorite) return;
         const content = (body ?? text).trim();
         if (!content) return;
         const chatId = makeChatId(user.uid, selectedContact.id);
@@ -330,15 +276,24 @@ export default function App() {
         if (selectedContact.id === HA_USER.id) replyAsHaBot(chatId, content);
     }
 
+    async function sendToFavoritesOnly(body) {
+        if (!user) return;
+        const content = (body ?? text).trim();
+        if (!content) return;
+        const p = push(dbRef(db, `favoritesChat/messages`));
+        await set(p, { sender: user.uid, name: user.displayName, photo: user.photoURL || `https://api.dicebear.com/6.x/initials/svg?seed=${user.displayName}`, text: content, type: "text", timestamp: nowTs() });
+        setText("");
+    }
+
     function updateTyping(status) {
-        if (!user || !selectedContact || selectedContact.isGlobal) return;
+        if (!user || !selectedContact || selectedContact.isGlobal || selectedContact.isFavorite) return;
         const id = makeChatId(user.uid, selectedContact.id);
         set(dbRef(db, `chats/${id}/typing/${user.uid}`), { typing: status, name: user.displayName });
     }
 
     function handleTypingChange(e) {
         setText(e.target.value);
-        if (selectedContact && !selectedContact.isGlobal) {
+        if (selectedContact && !selectedContact.isGlobal && !selectedContact.isFavorite) {
             updateTyping(true);
             if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
             typingTimerRef.current = setTimeout(()=>updateTyping(false), 1000);
@@ -346,7 +301,7 @@ export default function App() {
     }
 
     function startVoiceToText() {
-        if (selectedContact?.isGlobal) return alert("Voice-to-Text disabled for Global Chat.");
+        if (selectedContact?.isGlobal || selectedContact?.isFavorite) return; 
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SR) return alert("Use Chrome");
         if (recognitionRef.current) { recognitionRef.current.stop(); recognitionRef.current=null; setListening(false); return; }
@@ -360,14 +315,15 @@ export default function App() {
     async function uploadImageAndSend(file, u, receiverId, chatPath) {
         if (!u || !file) return;
         const isGlobal = receiverId === GLOBAL_CHAT_USER.id;
+        const isFav = receiverId === FAVORITES_USER.id;
         const uploadFileName = `${u.uid}-${nowTs()}-${file.name}`;
-        const storagePath = isGlobal ? `global_chat_images/${uploadFileName}` : `chat_images/${makeChatId(u.uid, receiverId)}/${uploadFileName}`;
+        const storagePath = (isGlobal || isFav) ? `global_chat_images/${uploadFileName}` : `chat_images/${makeChatId(u.uid, receiverId)}/${uploadFileName}`;
         const sRef = storageRef(storage, storagePath);
         try {
             const snapshot = await uploadBytes(sRef, file);
             const url = await getDownloadURL(snapshot.ref);
             const p = push(dbRef(db, chatPath));
-            await set(p, { sender: u.uid, name: u.displayName, photo: u.photoURL || `https://api.dicebear.com/6.x/initials/svg?seed=${u.displayName}`, text: file.name, type: "image", url: url, timestamp: nowTs(), delivered: !isGlobal ? false : true, read: true, edited: false, deleted: false, reactions: {} });
+            await set(p, { sender: u.uid, name: u.displayName, photo: u.photoURL || `https://api.dicebear.com/6.x/initials/svg?seed=${u.displayName}`, text: file.name, type: "image", url: url, timestamp: nowTs(), delivered: true, read: true, edited: false, deleted: false, reactions: {} });
         } catch (error) { console.error("Image upload failed:", error); }
     }
 
@@ -382,21 +338,21 @@ export default function App() {
 
     async function editMessage(msg) {
         const nt = window.prompt("Edit:", msg.text); if (nt == null) return;
-        const id = selectedContact.isGlobal ? null : makeChatId(user.uid, selectedContact.id);
-        const path = selectedContact.isGlobal ? `globalChat/messages/${msg.id}` : `chats/${id}/messages/${msg.id}`;
+        const id = (selectedContact.isGlobal || selectedContact.isFavorite) ? null : makeChatId(user.uid, selectedContact.id);
+        const path = selectedContact.isGlobal ? `globalChat/messages/${msg.id}` : selectedContact.isFavorite ? `favoritesChat/messages/${msg.id}` : `chats/${id}/messages/${msg.id}`;
         await update(dbRef(db, path), { text:nt, edited:true }); setActiveMenuId(null);
     }
 
     async function deleteMessage(msg) {
         if (!window.confirm("Delete for everyone?")) return;
-        const id = selectedContact.isGlobal ? null : makeChatId(user.uid, selectedContact.id);
-        const path = selectedContact.isGlobal ? `globalChat/messages/${msg.id}` : `chats/${id}/messages/${msg.id}`;
+        const id = (selectedContact.isGlobal || selectedContact.isFavorite) ? null : makeChatId(user.uid, selectedContact.id);
+        const path = selectedContact.isGlobal ? `globalChat/messages/${msg.id}` : selectedContact.isFavorite ? `favoritesChat/messages/${msg.id}` : `chats/${id}/messages/${msg.id}`;
         await update(dbRef(db, path), { text:"Message deleted", deleted:true }); setActiveMenuId(null);
     }
 
     async function toggleReaction(msg, emoji) {
-        const id = selectedContact.isGlobal ? null : makeChatId(user.uid, selectedContact.id);
-        const path = selectedContact.isGlobal ? `globalChat/messages/${msg.id}` : `chats/${id}/messages/${msg.id}`;
+        const id = (selectedContact.isGlobal || selectedContact.isFavorite) ? null : makeChatId(user.uid, selectedContact.id);
+        const path = selectedContact.isGlobal ? `globalChat/messages/${msg.id}` : selectedContact.isFavorite ? `favoritesChat/messages/${msg.id}` : `chats/${id}/messages/${msg.id}`;
         const mRef = dbRef(db, path);
         const snap = await new Promise(res => onValue(mRef, s => res(s.val()), { onlyOnce:true }));
         const reactions = snap?.reactions || {};
@@ -407,19 +363,6 @@ export default function App() {
         await update(mRef, { reactions: nextObj }); setActiveMenuId(null);
     }
 
-    useEffect(()=>{ return () => { if (messagesRefActive.current) off(messagesRefActive.current); if (typingRefActive.current) off(typingRefActive.current); }; }, []);
-
-    useEffect(()=>{
-        if (!user) return;
-        const uRef = dbRef(db, `users/${user.uid}`);
-        const onUnload = () => update(uRef, { online:false, lastSeen:nowTs() });
-        window.addEventListener("beforeunload", onUnload);
-        return () => window.removeEventListener("beforeunload", onUnload);
-    }, [user]);
-
-    useEffect(()=>{ if (!selectedContact?.isGlobal) { messagesEndRef.current?.scrollIntoView({ behavior:"smooth" }); } }, [messages, selectedContact]);
-
-    // ---------------- Styles ----------------
     const theme_palette = theme === "dark"
         ? { bg:"#0b141a", sidebar:"#202c33", panel:"#0f1a1b", tile:"#1f2c33", text:"#e9edef", muted:"#9fbfb1", accent:"#b2f391ff", readBlue:"#1877f2" }
         : { bg:"#f6f7f8", sidebar:"#ffffff", panel:"#ffffff", tile:"#e9eef0", text:"#081316", muted:"#607080", accent:"#D0F0C0", readBlue:"#1877f2" };
@@ -452,36 +395,23 @@ export default function App() {
     };
 
     const isFriend = id => !!friendsMap[id];
+    
     if (loading) return null; 
-    if (!user) {
+
+    if (!user || showRestorePrompt) {
         return (
-            <div style={{ ...styles.app, alignItems:"center", justifyContent:"center" }}>
-                <div style={{ textAlign:"center" }}>
-                    <img src="https://cdn-icons-png.flaticon.com/512/733/733585.png" alt="logo" style={{ width:120, height:120, marginBottom:12, borderRadius:18 }} />
-                    <h1 style={{ margin:6 }}>Let's Chat</h1>
-                    <p style={{ color: theme_palette.muted }}>Sign in to chat</p>
-                    <button onClick={()=>signInWithPopup(auth, provider)} style={{ padding:"10px 18px", borderRadius:12, background:theme_palette.accent, color:"#fff", border:"none", cursor:"pointer" }}>Sign in with Google</button>
-                </div>
-            </div>
+            <SignIn 
+                user={user} 
+                showRestorePrompt={showRestorePrompt} 
+                handleRestoreData={handleRestoreData} 
+                handleStartFresh={handleStartFresh} 
+                theme_palette={theme_palette}
+                styles={styles}
+            />
         );
     }
 
-    if (showRestorePrompt) {
-        return (
-            <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.85)", zIndex:999, display:"flex", alignItems:"center", justifyContent:"center", color:theme_palette.text }}>
-                <div style={{ background:theme_palette.sidebar, padding:32, borderRadius:16, textAlign:"center", maxWidth:400, border:`1px solid ${theme_palette.tile}` }}>
-                    <h2>Welcome Back!</h2>
-                    <p style={{ color:theme_palette.muted, margin:"15px 0 24px" }}>You signed out previously. How would you like to start this session?</p>
-                    <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                        <button onClick={handleRestoreData} style={{ background:theme_palette.accent, border:"none", padding:12, borderRadius:8, cursor:"pointer", fontWeight:600, color:"#000" }}>Continue Previous Account</button>
-                        <button onClick={handleStartFresh} style={{ background:"transparent", border:`1px solid ${theme_palette.muted}`, color:theme_palette.text, padding:12, borderRadius:8, cursor:"pointer" }}>Start Fresh (Wipe Past Data)</button>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
-    const usersWithoutSelf = contactsAll.filter(c => c.id !== user.uid && c.id !== HA_USER.id && c.id !== GLOBAL_CHAT_USER.id);
+    const usersWithoutSelf = contactsAll.filter(c => c.id !== user.uid && c.id !== HA_USER.id && c.id !== GLOBAL_CHAT_USER.id && c.id !== FAVORITES_USER.id);
     const sortByActivity = (a, b) => (lastMessageTimes[b.id] || 0) - (lastMessageTimes[a.id] || 0);
     const friendsList = usersWithoutSelf.filter(u => isFriend(u.id)).sort(sortByActivity);
     const usersList = usersWithoutSelf.filter(u => !isFriend(u.id)).sort(sortByActivity);
@@ -505,6 +435,10 @@ export default function App() {
                     <div onClick={()=>openChat(GLOBAL_CHAT_USER)} style={{...styles.contactRow, background: selectedContact?.id === GLOBAL_CHAT_USER.id ? (theme==="dark"?"#121d20ff":"#eef6f3") : "transparent"}}>
                         <img src={GLOBAL_CHAT_USER.photo} style={{ width:46, height:46, borderRadius:999 }} alt="Global Chat" />
                         <div><div style={{ fontWeight:700 }}>{GLOBAL_CHAT_USER.name}</div><div style={{ fontSize:12, color:theme_palette.muted }}>Public Chat</div></div>
+                    </div>
+                    <div onClick={()=>openChat(FAVORITES_USER)} style={{...styles.contactRow, background: selectedContact?.id === FAVORITES_USER.id ? (theme==="dark"?"#121d20ff":"#eef6f3") : "transparent"}}>
+                        <img src={FAVORITES_USER.photo} style={{ width:46, height:46, borderRadius:999 }} alt="Favorites" />
+                        <div><div style={{ fontWeight:700 }}>{FAVORITES_USER.name}</div><div style={{ fontSize:12, color:theme_palette.muted }}>Friends Only</div></div>
                     </div>
                     <div style={styles.sectionTitle}>HA Chat</div>
                     <div onClick={()=>openChat(HA_USER)} style={{...styles.contactRow, background: selectedContact?.id === HA_USER.id ? (theme==="dark"?"#121d20ff":"#eef6f3") : "transparent"}}>
@@ -535,6 +469,14 @@ export default function App() {
             {selectedContact ? (
                 selectedContact.isGlobal ? (
                     <GlobalChat user={user} palette={theme_palette} styles={styles} text={text} setText={setText} messagesEndRef={messagesEndRef} EMOJIS={EMOJIS} selectedContact={selectedContact} onCloseChat={() => { setSelectedContact(null); if (window.innerWidth < 820) setSidebarVisible(true); }} uploadImageAndSend={uploadImageAndSend} hoveredMessageId={hoveredMessageId} activeMenuId={activeMenuId} handleMouseEnter={handleMouseEnter} handleMouseLeave={handleMouseLeave} handleDotsClick={handleDotsClick} handleTouchStart={handleTouchStart} handleTouchEnd={handleTouchEnd} deleteMessage={deleteMessage} editMessage={editMessage} toggleReaction={toggleReaction} fmtTime={fmtTime} />
+                ) : selectedContact.isFavorite ? (
+                    <Favorite 
+                        user={user} palette={theme_palette} styles={styles} text={text} setText={setText} messagesEndRef={messagesEndRef} EMOJIS={EMOJIS} selectedContact={selectedContact} 
+                        onCloseChat={() => { setSelectedContact(null); if (window.innerWidth < 820) setSidebarVisible(true); }}
+                        friendsMap={friendsMap} hoveredMessageId={hoveredMessageId} activeMenuId={activeMenuId} handleMouseEnter={handleMouseEnter} handleMouseLeave={handleMouseLeave} handleDotsClick={handleDotsClick} handleTouchStart={handleTouchStart} handleTouchEnd={handleTouchEnd} deleteMessage={deleteMessage} editMessage={editMessage} toggleReaction={toggleReaction} fmtTime={fmtTime}
+                        sendTextMessage={sendToFavoritesOnly} handleImageFile={(e) => uploadImageAndSend(e.target.files[0], user, "FAVORITES_ID", `favoritesChat/messages`)}
+                        startVoiceToText={startVoiceToText} listening={listening} emojiOpen={emojiOpen} setEmojiOpen={setEmojiOpen}
+                    />
                 ) : (
                     <div style={styles.chatArea}>
                         <div style={styles.chatHeader}>
