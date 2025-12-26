@@ -7,15 +7,72 @@ import { auth, db, storage, provider } from "./firebase";
 import { HA_USER, replyAsHaBot } from "./HAchat"; 
 import GlobalChat from "./GlobalChat";
 import SignIn from "./SignIn"; 
-import Favorite from "./Favorite"; // New Import
+import Favorite from "./Favorite";
 
 /* ---------------- Helpers & Constants ---------------- */
 const EMOJIS = [
-    "😀","😁","😂","🤣","😃","😄","😅","😆","😉","😊",
-    "😇","🙂","🙃","😋","😎","😍","😘","🤗","🤔","🤨",
-    "😐","😑","😶","😴","😪","😢","😭","😠","😡","🤯",
-    "🤝","👍","👎","🙏","✨","🔥","💯","❤️","💙","💚",
-    "💛","🧡","🎉","🎁","📷","🎧","🗺️","☀️","🌙","⭐"
+    "😀","😃","😄","😁","😆","🥹","😅","😂","🤣","🥲","☺️","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛",
+    "😝","😜","🤪","🤨","🧐","🤓","😎","🥸","🤩","🥳","🙂‍↕️","😏","😒","🙂‍↔️","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺",
+    "😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😶‍🌫️","😱","😨","😰","😥","😓","🤗","🤔","🫣","🤭","🫢","🫡","🤫","🫠","🤥",
+    "😶","🫥","😐","🫤","😑","🫨","😬","🙄","😯","😦","😧","😮","😲","🥱","🫩","😴","🤤","😪","😮‍💨","😵","😵‍💫","🤐","🥴","🤢","🤮",
+    "🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","☠️","👽","👾","🤖","🎃","😺","😸","😹","😻","😼","😽",
+    "🙀","😿","😾","🫶","🤲","👐","🙌","👏","🤝","👍","👎","👊","✊","🤛","🤜","🫷","🫸","🤞","✌️","🫰","🤟","🤘","👌","🤌","🤏",
+    "🫳","🫴","👈","👉","👆","👇","☝️","✋","🤚","🖐️","🖖","👋","🤙","🫲","🫱","💪","🦾","✍️","🙏🏻","🫵","🦶","🦵","🦿","💄","💋",
+    "👄","🫦","🦷","👅","👂","🦻","👃","🫆","👣","👁️","👀","🫀","🫁","🧠","🗣️","👤","👥","🫂","👶","👧","🧒🏻","👦🏻","👩🏻","🧑🏻","👨🏻",
+    "👩🏻‍🦱","🧑🏻‍🦱","👨🏻‍🦱","👩🏻‍🦰","🧑🏻‍🦰","👨🏻‍🦰","👱🏻‍♀️","👱🏻","👱🏻‍♂️","👩🏻‍🦳","🧑🏻‍🦳","🧔🏻‍♂️","👵🏻","🧓🏻","👴🏻","👲🏻","👳🏻‍♀️","👳🏻","👳🏻‍♂️","🧕🏻","👮🏻‍♀️","👮🏻","👮🏻‍♂️","👷🏻‍♀️","👷🏻‍♀️",
+    "👷🏻","👷🏻‍♂️","💂🏻‍♀️","💂🏻","💂🏻‍♂️","🕵🏻‍♀️","🕵🏻","🕵🏻‍♂️","👩🏻‍⚕️","🧑🏻‍⚕️","👨🏻‍⚕️","👩🏻‍🌾","🧑🏻‍🌾","👨🏻‍🌾","👩🏻‍🍳","🧑🏻‍🍳","👨🏻‍🍳","👩🏻‍🎓","🧑🏻‍🎓","👨🏻‍🎓","👩🏻‍🎤","🧑🏻‍🎤","👨🏻‍🎤","👩🏻‍🏫","🧑🏻‍🏫",
+    "👩🏻‍🏭","🧑🏻‍🔧","🧑🏻‍🏭","👨🏻‍🏭","👩🏻‍💻","🧑🏻‍💻","👨🏻‍💻","👩🏻‍💼","🧑🏻‍💼","👨🏻‍💼","👩🏻‍🔧","👨🏻‍🔧","👩🏻‍🔬","🧑🏻‍🔬","👨🏻‍🔬","👩🏻‍🎨","🧑🏻‍🎨","👨🏻‍🎨","👩🏻‍🚒","🧑🏻‍🚒","👨🏻‍🚒","👩🏻‍✈️","🧑🏻‍✈️","👨🏻‍✈️","👩🏻‍🚀",
+    "🧑🏻‍🚀","👨🏻‍🚀","👩🏻‍⚖️","🧑🏻‍⚖️","👨🏻‍⚖️","👰🏻‍♀️","👰🏻","🤵🏻‍♀️","🤵🏻","🤵🏻‍♂️","👸🏻","🫅🏻","🤴🏻","🥷🏻","🦸🏻‍♀️","🦸🏻","🦸🏼‍♂️","🦹🏻‍♀️","🦹🏻","🦹🏻‍♂️","🤶🏻","🧑🏻‍🎄","🎅🏻","🧙🏻‍♀️","🧙🏻",
+    "🧙🏻‍♂️","🧝🏻‍♀️","🧝🏻","🧝🏻‍♂️","🧌","🧛🏻‍♀️","🧛🏻","🧛🏻‍♂️","🧟‍♀️","🧟","🧟‍♂️","🧞‍♀️","🧞","🧞‍♂️","🧜🏻‍♀️","🧜🏻","🧜🏻‍♂️","🧚🏻‍♀️","🧚🏻","🧚🏻‍♂️","👼🏻","🤰🏻","🫄🏻","🫃🏻","🤱🏻",
+    "👩🏻‍🍼","🧑🏻‍🍼","👨🏻‍🍼","🙇🏻‍♀️","🙇🏻","🙇🏻‍♂️","💁🏻‍♀️","💁🏻","💁🏻‍♂️","🙅🏻‍♀️","🙅🏻","🙅🏻‍♂️","🙆🏻‍♀️","🙆🏻","🙆🏻‍♂️","🙋🏻‍♀️","🙋🏻","🙋🏻‍♂️","🧏🏻‍♀️","🧏🏻","🧏🏻‍♂️","🤦🏻‍♀️","🤦🏻","🤦🏻‍♂️","🤷🏻‍♀️",
+    "🤷🏻","🤷🏻‍♂️","🙎🏻‍♀️","🙎🏻","🙎🏻‍♂️","🙍🏻‍♀️","🙍🏻","🙍🏻‍♂️","💇🏻‍♀️","💇🏻","💇🏻‍♂️","💆🏻‍♀️","💆🏻","💆🏻‍♂️","🧖🏻‍♀️","🧖🏻","🧖🏻‍♂️","💅🏻","🤳🏻","💃🏻","🕺🏻","👯🏻‍♀️","👯🏻",
+    "👯🏻‍♂️","🕴🏻","👩🏻‍🦽","🧑🏻‍🦽","👨🏻‍🦽","👩🏻‍🦼","🧑🏻‍🦼","👨🏻‍🦼","🚶🏻‍♀️","🚶🏻","🚶🏻‍♂️","👩🏻‍🦯","🧑🏻‍🦯","👨🏻‍🦯","🧎🏻‍♀️","🧎🏻","🧎🏻‍♂️","🏃🏻‍♀️","🏃🏻","🏃🏻‍♂️","🧍🏻‍♀️","🧍🏻","🧍🏻‍♂️","👫",
+    "👭","👬","👩‍❤️‍👨","👩‍❤️‍👩","💑","👨‍❤️‍👨","👩‍❤️‍💋‍👨","💏","👨‍❤️‍💋‍👨","🪢","🧶","🧵","🪡","🧥","🥼","🦺","👚","👕","👖","🩲","🩳","👔","👗","👙","🩱",
+    "👘","🥻","🩴","🥿","👠","👡","👢","👞","👟","🥾","🧦","🧤","🧣","🎩","🧢","👒","🎓","⛑️","🪖","👑","💍","👝","👛","👜","💼",
+    "🎒","🧳","👓","🕶️","🥽","🌂","🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐻‍❄️","🐨","🐯","🦁","🐮","🐷","🐽","🐸","🐵","🙈","🙉",
+    "🙊","🐒","🐔","🐧","🐦","🐤","🐣","🐥","🪿","🦆","🐦‍⬛","🦅","🦉","🦇","🐺","🐗","🐴","🦄","🫎","🐝","🪱","🐛","🦋","🐌","🐞",
+    "🐜","🪰","🐍","🪲","🦎","🪳","🦖","🦟","🦕","🦗","🐙","🕷️","🦑","🕸️","🪼","🦂","🦐","🐢","🦞","🦀","🐊","🦏","🐡","🐅","🐪",
+    "🐠","🐆","🐟","🦓","🐬","🦍","🐳","🦧","🐋","🦣","🦈","🐘","🦭","🦛","🐫","🦒","🦘","🦬","🐃","🐂","🐄","🫏","🐩","🐎","🦮",
+    "🐖","🐕‍🦺","🐏","🐈","🐑","🐈‍⬛","🦙","🪶","🐐","🪽","🦌","🐓","🐕","🦃","🦤","🦡","🦚","🦫","🦜","🦦","🦢","🦥","🦩","🐁","🕊️",
+    "🐀","🐇","🐿️","🦝","🦔","🦨","🐾","🐉","🪵","🐲","🌱","🐦‍🔥","🌿","🌵","☘️","🎄","🍀","🌲","🎍","🌳","🪴","🌴","🎋","🪾","🍃",
+    "🍂","🌾","🍁","💐","🪺","🌷","🪹","🌹","🍄","🥀","🍄‍🟫","🪻","🐚","🪷","🪸","🌺","🪨","🌸","🌼","🌗","🌻","🌘","🌞","🌑","🌝",
+    "🌒","🌛","🌓","🌜","🌔","🌚","🌙","🌕","🌎","🌖","🌍","🌏","🔥","🪐","🌪️","💫","🌈","⭐","☀️","🌟","🌤️","✨","⛅","⚡","🌥️",
+    "☄️","☁️","💥","🌦️","🌧️","💧","⛈️","💦","🌩️","🫧","🌨️","☔","❄️","☂️","☃️","🌊","⛄","🌫️","🌬️","💨","🍏","🍓","🍅","🌽","🥐",
+    "🍎","🫐","🍆","🥕","🥯","🍐","🍈","🥑","🫒","🍞","🍊","🍒","🫛","🧄","🥖","🥨","🧅","🥦","🍑","🍋","🍋‍🟩","🥭","🥬","🥔","🧀",
+    "🥚","🫜","🥒","🍍","🍌","🍉","🥥","🌶️","🍠","🍳","🍇","🥝","🫑","🫚","🧈","🥞","🍟","🧇","🍕","🥓","🫓","🥩","🥪","🍗","🥙",
+    "🍖","🧆","🦴","🌮","🌭","🌯","🍔","🫔","🥗","🍣","🥠","🍰","🌰","🥘","🍱","🥮","🎂","🥜","🫕","🥟","🥫","🦪","🍢","🍮","🍡",
+    "🍭","🫘","🍯","🫙","🍧","🍤","🍬","🥛","🍝","🍙","🍨","🍫","🫗","🍜","🍚","🍦","🍿","🍼","🍲","🍘","🥧","🍩","🫖","🍛","🍥",
+    "🧁","🍪","☕","🍵","🥃","🥣","🧃","🍸","🥡","🥤","🍹","🥢","🧋","🧉","🧂","🍶","🍾","🍺","🧊","🍻","🥄","🥂","🍴","🍷","🍽️",
+    "⚽","🎱","🏀","🪀","🏈","🏓","⚾","🏸","🥎","🏒","🎾","🏑","🏐","🥍","🏉","🏏","🥏","🪃","🥅","🎽","⛳","🛹","🪁","🛼","🛝",
+    "🛷","🏹","⛸️","🎣","🥌","🤿","🎿","🥊","⛷️","🥋","🏂","🪂","🤸🏻‍♂️","🏆","🥇","🥈","🥉","🏅","🎖️","🏵️","🎗️","🎫","🎟️","🎪","🎭",
+    "🩰","🎨","🫟","🎬","🎤","🎧","🎼","🎹","🪇","🥁","🪘","🎷","🎺","🪗","🎸","🪕","🪉","🪈","🎻","🎲","♟️","🎯","🎳","🎮","🎰","🧩",
+    "🚗","🚐","🚕","🛻","🚙","🚚","🚌","🚛","🚎","🚜","🏎️","🦯","🚓","🦽","🚑","🦼","🚒","🩼","🛴","🚲","🛵","🏍️","🛺","🚨","🛞",
+    "🚔","🚍","🚘","🚖","🚡","🚠","🚟","🚃","🚋","🚞","🚝","🚄","🚅","🚈","🚂","🚆","🚇","🚊","🚉","✈️","🛫","🛬","🛩️","💺","🛰️",
+    "🚀","🛸","🚁","🛶","⛵","🚤","🛥️","🛳️","⛴️","🚢","🛟","⚓","🪝","⛽","🚧","🚦","🚥","🚏","🗺️","🗿","🗽","🗼","🏰","🏝️","🏯",
+    "🏜️","🏟️","🌋","🎡","⛰️","🎢","🏔️","🎠","🗻","⛲","🏕️","⛱️","⛺","🏖️","🛖","🏠","🏤","🏡","🏥","🏘️","🏦","🏚️","🏨","🏗️","🏪",
+    "🏭","🏫","🏢","🏩","🏬","💒","🏣","🏛️","⛪","🎑","🕌","🏞️","🕍","🌅","🛕","🌄","🕋","🌠","⛩️","🎇","🛤️","🎆","🛣️","🌇","🗾",
+    "🌆","🏙️","🌃","🌌","🌉","🌁","⌚","📱","📲","💻","⌨️","🖨️","🖥️","🖱️","🖲️","🕹️","🗜️","💽","💾","💿","📀","📼","📷","📸","📹",
+    "📻","🎥","🎙️","📽️","🎚️","🎞️","🎛️","📞","🧭","☎️","⏱️","📟","⏲️","📠","⏰","📺","🕰️","⌛","🪔","⏳","🧯","📡","🛢️","🔋","💸",
+    "🪫","💵","🔌","💴","💡","💶","🔦","💷","🕯️","🪙","💰","🔨","💳","⚒️","🪪","🛠️","💎","⛏️","⚖️","🪏","🪜","🪚","🧰","🔩","🪛",
+    "⚙️","🔧","🪤","🧱","🗡️","⛓️","⚔️","⛓️‍💥","🛡️","🧲","🚬","🔫","⚰️","💣","🪦","🧨","⚱️","🪓","🏺","🔪","🔮","📿","🩹","🧿","🩺",
+    "🪬","💊","💈","💉","⚗️","🩸","🔭","🧬","🔬","🦠","🕳️","🧫","🩻","🧪","🌡️","🧹","🧼","🪠","🪥","🧺","🪒","🧻","🪮","🚽","🧽",
+    "🚰","🪣","🚿","🧴","🛁","🛎️","🔑","🖼️","🗝️","🪞","🚪","🪟","🪑","🛍️","🛋️","🛒","🛏️","🎁","🛌","🎈","🧸","🎏","🪆","🎀","🪄",
+    "🧧","🪅","✉️","🎊","📩","🎉","📨","🎎","📧","🪭","💌","🏮","📥","🎐","📤","🪩","📦","🏷️","📃","🪧","📄","📪","📑","📫","🧾",
+    "📬","📊","📭","📈","📮","📉","📯","🗒️","📜","🗓️","📆","📅","🗑️","📇","🗃️","🗳️","🗄️","📋","📁","📂","🗂️","🗞️","📰","📓","📔",
+    "📒","📕","📗","📘","📙","📚","📖","🔖","🧷","🔗","📎","🖇️","📐","📏","🧮","📌","📍","✂️","🖊️","🖋️","✒️","🖌️","🖍️","📝","✏️",
+    "🔍","🔎","🔏","🔒","🔐","🔓","🩷","❤️","🧡","💛","💚","🩵","💙","💜","🖤","🩶","🤍","🤎","💔","❤️‍🔥","❣️","❤️‍🩹","💕","💞","💓",
+    "💗","💖","💘","💝","💟","☮️","✝️","☪️","🕉️","☸️","🪯","✡️","🔯","🕎","☯️","☦️","🛐","⛎","♈","♉","♊","♋","♌","♍","♎",
+    "♏","♐","♑","♒","♓","🆔","⚛️","🉑","☢️","☣️","📴","📳","🈶","🈚","🈸","🈺","🈷️","✴️","🆚","💮","🉐","㊙️","㊗️","🈴","🈵",
+    "🈹","🈲","🅰️","🅱️","🆎","🆑","🅾️","🆘","❌","⭕","🛑","⛔","📛","🚫","💯","💢","♨️","🚷","🚯","🚳","🚱","🔞","📵","🚭","❗",
+    "❕","❓","❔","‼️","⁉️","🔅","🔆","〽️","⚠️","🚸","🔱","⚜️","🔰","♻️","✅","🈯","💹","❇️","✳️","❎","🌐","💠","Ⓜ️","🌀","💤",
+    "🏧","🚾","♿","🅿️","🛗","🈳","🈂️","🛂","🛃","🛄","🛅","🛜","🚹","🚺","🚼","🧑‍🧑‍🧒","🧑‍🧑‍🧒‍🧒","🧑‍🧒","🧑‍🧒‍🧒","⚧️","🚻","🚮","🎦","📶","🈁",
+    "🔣","ℹ️","🔤","🔡","🔠","🆖","🆗","🆙","🆒","🆕","🆓","0️⃣","1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟","🔢","#️⃣","*️⃣",
+    "⏏️","▶️","⏸️","⏯️","⏹️","⏺️","⏭️","⏮️","⏩","⏪","⏫","⏬","◀️","🔼","🔽","➡️","⬅️","⬆️","⬇️","↗️","↘️","↙️","↖️","↕️","↔️",
+    "↪️","⤴️","↩️","⤵️","🔀","🔁","🔂","🔄","🔃","🎵","🎶","➕","➖","➗","✖️","🟰","♾️","💲","💱","™️","©️","®️","👁️‍🗨️","🔚","🔙",
+    "🔛","🔝","🔜","〰️","➰","➿","✔️","☑️","🔘","🔴","🟠","🟡","🟢","🔵","🟣","⚫","⚪","🟤","🔺","🔻","🔸","🔹","🔶","🔷","🔳",
+    "🔲","▪️","▫️","◾","◽","◼️","◻️","🟥","🟧","🟨","🟩","🟦","🟪","⬛","⬜","🟫","🔈","🔇","🔉","🔊","🔔","🔕","📣","📢","💬",
+    "💭","🗯️","♠️","♣️","♥️","♦️","🃏","🎴","🀄","🕐","🕑","🕒","🕓","🕔","🕕","🕖","🕗","🕘","🕙","🕚","🕛","🕜","🕝","🕞","🕟",
+    "🕠","🕡","🕢","🕣","🕤","🕥","🕦","🕧","🏳️","🏴"
 ];
 
 const nowTs = () => Date.now();
@@ -71,6 +128,10 @@ export default function App() {
     const [lastMessageTimes, setLastMessageTimes] = useState({}); 
     const [hoveredMessageId, setHoveredMessageId] = useState(null); 
     const [activeMenuId, setActiveMenuId] = useState(null); 
+    
+    // NEW STATE FOR PROFILE
+    const [showProfileModal, setShowProfileModal] = useState(false);
+    const [currentUserData, setCurrentUserData] = useState(null);
 
     const messagesRefActive = useRef(null);
     const typingRefActive = useRef(null);
@@ -94,6 +155,7 @@ export default function App() {
                 setContactsAll([]);
                 setFriendsMap({});
                 setSelectedContact(null);
+                setCurrentUserData(null);
             }
             setLoading(false); 
         });
@@ -103,7 +165,12 @@ export default function App() {
     const initUserSession = (u) => {
         setUser(u);
         const myRef = dbRef(db, `users/${u.uid}`);
-        set(myRef, { name: u.displayName || "", photo: u.photoURL || "", email: u.email || "", online: true, lastSeen: nowTs() }).catch(()=>{});
+        
+        update(myRef, { online: true, lastSeen: nowTs() }).catch(()=>{});
+        
+        onValue(myRef, (snap) => {
+            setCurrentUserData(snap.val());
+        });
 
         const usersRef = dbRef(db, "users");
         onValue(usersRef, (snap) => {
@@ -143,7 +210,7 @@ export default function App() {
                 localStorage.setItem("persistent_friends_list", JSON.stringify(data));
             }
         });
-    }
+    };
 
     const handleExplicitSignOut = async () => {
         if (!user) return;
@@ -163,7 +230,7 @@ export default function App() {
             Object.keys(usersData).forEach(uid => { if (usersData[uid].friends && usersData[uid].friends[myUid]) updates[`users/${uid}/friends/${myUid}`] = null; });
             if (Object.keys(updates).length > 0) await update(dbRef(db), updates);
         }
-        await remove(dbRef(db, `users/${myUid}`));
+        await update(dbRef(db, `users/${myUid}`), { online: false, lastSeen: nowTs() });
         signOut(auth);
     };
 
@@ -271,7 +338,7 @@ export default function App() {
         if (!content) return;
         const chatId = makeChatId(user.uid, selectedContact.id);
         const p = push(dbRef(db, `chats/${chatId}/messages`));
-        await set(p, { sender: user.uid, name: user.displayName, text: content, type: "text", timestamp: nowTs(), delivered:false, read:false, edited:false, deleted:false, reactions:{} });
+        await set(p, { sender: user.uid, name: currentUserData?.name || user.displayName, text: content, type: "text", timestamp: nowTs(), delivered:false, read:false, edited:false, deleted:false, reactions:{} });
         setText(""); updateTyping(false);
         if (selectedContact.id === HA_USER.id) replyAsHaBot(chatId, content);
     }
@@ -281,14 +348,14 @@ export default function App() {
         const content = (body ?? text).trim();
         if (!content) return;
         const p = push(dbRef(db, `favoritesChat/messages`));
-        await set(p, { sender: user.uid, name: user.displayName, photo: user.photoURL || `https://api.dicebear.com/6.x/initials/svg?seed=${user.displayName}`, text: content, type: "text", timestamp: nowTs() });
+        await set(p, { sender: user.uid, name: currentUserData?.name || user.displayName, photo: currentUserData?.photo || user.photoURL || `https://api.dicebear.com/6.x/initials/svg?seed=${user.displayName}`, text: content, type: "text", timestamp: nowTs() });
         setText("");
     }
 
     function updateTyping(status) {
         if (!user || !selectedContact || selectedContact.isGlobal || selectedContact.isFavorite) return;
         const id = makeChatId(user.uid, selectedContact.id);
-        set(dbRef(db, `chats/${id}/typing/${user.uid}`), { typing: status, name: user.displayName });
+        set(dbRef(db, `chats/${id}/typing/${user.uid}`), { typing: status, name: currentUserData?.name || user.displayName });
     }
 
     function handleTypingChange(e) {
@@ -323,7 +390,7 @@ export default function App() {
             const snapshot = await uploadBytes(sRef, file);
             const url = await getDownloadURL(snapshot.ref);
             const p = push(dbRef(db, chatPath));
-            await set(p, { sender: u.uid, name: u.displayName, photo: u.photoURL || `https://api.dicebear.com/6.x/initials/svg?seed=${u.displayName}`, text: file.name, type: "image", url: url, timestamp: nowTs(), delivered: true, read: true, edited: false, deleted: false, reactions: {} });
+            await set(p, { sender: u.uid, name: currentUserData?.name || u.displayName, photo: currentUserData?.photo || u.photoURL || `https://api.dicebear.com/6.x/initials/svg?seed=${u.displayName}`, text: file.name, type: "image", url: url, timestamp: nowTs(), delivered: true, read: true, edited: false, deleted: false, reactions: {} });
         } catch (error) { console.error("Image upload failed:", error); }
     }
 
@@ -371,8 +438,8 @@ export default function App() {
         app: { display:"flex", height:"100vh", background:theme_palette.bg, color:theme_palette.text, fontFamily:"Segoe UI, Roboto, Arial", overflow:"hidden" },
         sidebar: { width: sidebarVisible ? (window.innerWidth < 820 ? '100%' : 320) : 0, minWidth: sidebarVisible ? (window.innerWidth < 820 ? '100%' : 260) : 0, transition: "width .22s", display: "flex", flexDirection: "column", overflow: "hidden", position: window.innerWidth < 820 ? 'absolute' : 'relative', zIndex: window.innerWidth < 820 ? 50 : 1, height: "100vh", background: theme_palette.sidebar, borderRight: `1px solid ${theme_palette.tile}` },
         header: { padding:14, display:"flex", justifyContent:"space-between", alignItems:"center", borderBottom:`1px solid ${theme_palette.tile}`, background:theme_palette.sidebar },
-        logoWrap: { display:"flex", alignItems:"center", gap:10 },
-        logoImg: { width:44, height:44, borderRadius:10 },
+        logoWrap: { display:"flex", alignItems:"center", gap:10, cursor:"pointer" },
+        logoImg: { width:44, height:44, borderRadius:10, objectFit:"cover" },
         search: { margin:12, padding:"10px 14px", borderRadius:24, background:theme_palette.tile, color:theme_palette.text, border:"none", width:"calc(100% - 24px)", outline:"none" },
         contactsWrap: { overflowY:"auto", height:"calc(100vh - 220px)", paddingBottom:10 },
         sectionTitle: { padding: "10px 14px", color: theme_palette.muted, fontSize: 13, fontWeight: 700, background: "transparent" },
@@ -391,7 +458,11 @@ export default function App() {
         threeDots: { position: "absolute", top: 2, right: 4, width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,0.1)", color: theme_palette.text, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", zIndex: 15, lineHeight: 0 },
         actionMenu: { position: "absolute", top: 0, background: theme_palette.sidebar, borderRadius: 8, boxShadow: "0 2px 8px rgba(0,0,0,0.3)", zIndex: 20, overflow: "hidden", display: "flex", flexDirection: "column", minWidth: 160 },
         menuItem: { padding: "10px 14px", fontSize: 14, cursor: "pointer", color: theme_palette.text, borderBottom: `1px solid ${theme_palette.tile}`, display: "flex", justifyContent: "space-between" },
-        emojiBox: { position:"absolute", bottom:78, right: sidebarVisible ? 340 : 20, background:theme_palette.panel, border:`1px solid ${theme_palette.tile}`, padding:8, borderRadius:8, display:"grid", gridTemplateColumns:"repeat(10, 1fr)", gap:6, zIndex:60, maxWidth:520, maxHeight:220, overflowY:"auto" }
+        emojiBox: { position:"absolute", bottom:78, right: sidebarVisible ? 340 : 20, background:theme_palette.panel, border:`1px solid ${theme_palette.tile}`, padding:8, borderRadius:8, display:"grid", gridTemplateColumns:"repeat(10, 1fr)", gap:6, zIndex:60, maxWidth:520, maxHeight:220, overflowY:"auto" },
+        
+        // NEW STYLES
+        modalOverlay: { position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.7)", zIndex:1000, display:"flex", justifyContent:"center", alignItems:"center" },
+        modalContent: { padding:24, borderRadius:12, width:320, textAlign:"center" }
     };
 
     const isFriend = id => !!friendsMap[id];
@@ -407,6 +478,14 @@ export default function App() {
                 handleStartFresh={handleStartFresh} 
                 theme_palette={theme_palette}
                 styles={styles}
+                db={db}
+                storage={storage}
+                dbRef={dbRef}
+                storageRef={storageRef}
+                uploadBytes={uploadBytes}
+                getDownloadURL={getDownloadURL}
+                update={update}
+                set={set}
             />
         );
     }
@@ -416,13 +495,67 @@ export default function App() {
     const friendsList = usersWithoutSelf.filter(u => isFriend(u.id)).sort(sortByActivity);
     const usersList = usersWithoutSelf.filter(u => !isFriend(u.id)).sort(sortByActivity);
 
+    // Profile Setup Logic
+    const ProfileUpdateModal = ({ isInitial = false }) => {
+        const [fname, setFname] = useState(currentUserData?.fname || "");
+        const [lname, setLname] = useState(currentUserData?.lname || "");
+        const [pimg, setPimg] = useState(currentUserData?.photo || "");
+        const [upLoading, setUpLoading] = useState(false);
+
+        const handleFile = async (e) => {
+            const file = e.target.files[0];
+            if(!file) return;
+            setUpLoading(true);
+            const sRef = storageRef(storage, `profiles/${user.uid}`);
+            const snap = await uploadBytes(sRef, file);
+            const url = await getDownloadURL(snap.ref);
+            setPimg(url);
+            setUpLoading(false);
+        };
+
+        const save = async () => {
+            if(!fname.trim() || !lname.trim() || !pimg) return alert("All fields required");
+            await update(dbRef(db, `users/${user.uid}`), {
+                fname: fname.trim(),
+                lname: lname.trim(),
+                name: `${fname.trim()} ${lname.trim()}`,
+                photo: pimg,
+                hasProfile: true
+            });
+            setShowProfileModal(false);
+        };
+
+        return (
+            <div style={styles.modalOverlay}>
+                <div style={{ ...styles.modalContent, background: theme_palette.sidebar }}>
+                    <h3>{isInitial ? "Complete Profile" : "Edit Profile"}</h3>
+                    <label style={{ display:"block", cursor:"pointer", marginBottom:15 }}>
+                        <img src={pimg || "https://cdn-icons-png.flaticon.com/512/149/149071.png"} style={{ width:80, height:80, borderRadius:40, objectFit:"cover" }} alt="profile" />
+                        <input type="file" hidden accept="image/*" onChange={handleFile} />
+                        <div style={{ fontSize:12, color:theme_palette.muted }}>{upLoading ? "Uploading..." : "Click to change"}</div>
+                    </label>
+                    <input style={styles.search} placeholder="First Name" value={fname} onChange={e=>setFname(e.target.value)} />
+                    <input style={styles.search} placeholder="Last Name" value={lname} onChange={e=>setLname(e.target.value)} />
+                    <button onClick={save} style={{ ...styles.roundBtn, width:"100%", marginTop:10 }}>Save Profile</button>
+                    {!isInitial && <button onClick={()=>setShowProfileModal(false)} style={{ background:"transparent", border:"none", color:theme_palette.muted, marginTop:10, cursor:"pointer" }}>Cancel</button>}
+                </div>
+            </div>
+        );
+    };
+
     return (
         <div style={styles.app}>
+            {(!currentUserData?.hasProfile) && <ProfileUpdateModal isInitial={true} />}
+            {showProfileModal && <ProfileUpdateModal />}
+            
             <div style={styles.sidebar}>
                 <div style={styles.header}>
-                    <div style={styles.logoWrap}>
-                        <img src="https://cdn-icons-png.flaticon.com/512/733/733585.png" alt="logo" style={styles.logoImg} />
-                        <div><div style={{ fontWeight:800 }}>{user.displayName}</div><div style={{ fontSize:12, color:theme_palette.muted }}>{user.email}</div></div>
+                    <div style={styles.logoWrap} onClick={() => setShowProfileModal(true)}>
+                        <img src={currentUserData?.photo || user.photoURL || "https://cdn-icons-png.flaticon.com/512/149/149071.png"} alt="logo" style={styles.logoImg} />
+                        <div>
+                            <div style={{ fontWeight:800 }}>My Profile</div>
+                            <div style={{ fontSize:12, color:theme_palette.muted }}>{user.email}</div>
+                        </div>
                     </div>
                     <div style={{ display:"flex", gap:8 }}>
                         <button title="Toggle theme" onClick={()=>setTheme(p=>p==="light"?"dark":"light")} style={styles.smallBtn}>{theme==="dark"?"☀️":"🌙"}</button>
@@ -449,7 +582,7 @@ export default function App() {
                     {friendsList.length === 0 && <div style={{ padding:"8px 14px", color:theme_palette.muted }}>No friends yet</div>}
                     {friendsList.filter(c => (c.name||"").toLowerCase().includes(searchQuery.toLowerCase())).map(contact => (
                         <div key={contact.id} style={{...styles.contactRow, background: selectedContact?.id === contact.id ? (theme==="dark"?"#132226":"#eef6f3") : "transparent"}} onClick={()=>openChat(contact)}>
-                            <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name}`} style={{ width:46, height:46, borderRadius:999 }} alt={contact.name} />
+                            <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name}`} style={{ width:46, height:46, borderRadius:999, objectFit:"cover" }} alt={contact.name} />
                             <div style={{ flex:1 }}><div style={{ fontWeight:700 }}>{contact.name}</div><div style={{ fontSize:12, color:theme_palette.muted }}>{contact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[contact.id])}`}</div></div>
                             <button title="Remove friend" onClick={e=>{e.stopPropagation(); removeFriend(contact.id);}} style={styles.smallBtn}>🗑</button>
                         </div>
@@ -458,7 +591,7 @@ export default function App() {
                     {usersList.filter(c => (c.name||"").toLowerCase().includes(searchQuery.toLowerCase())).map(contact => (
                         <div key={contact.id} style={styles.contactRow}>
                             <div style={{ display:"flex", flex:1, gap:12, cursor:"pointer" }} onClick={() => openChat(contact)}>
-                                <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name}`} style={{ width:46, height:46, borderRadius:999 }} alt={contact.name} />
+                                <img src={contact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${contact.name}`} style={{ width:46, height:46, borderRadius:999, objectFit:"cover" }} alt={contact.name} />
                                 <div><div style={{ fontWeight:700 }}>{contact.name}</div><div style={{ fontSize:12, color:theme_palette.muted }}>{contact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[contact.id])}`}</div></div>
                             </div>
                             <button title="Make Friend" onClick={async (e) => { e.stopPropagation(); await addFriend(contact.id); }} style={styles.smallBtn}>👥</button>
@@ -482,7 +615,7 @@ export default function App() {
                         <div style={styles.chatHeader}>
                             <div style={{ display:"flex", alignItems:"center", gap:12 }}>
                                 {window.innerWidth < 820 && <button onClick={()=>{setSelectedContact(null); setSidebarVisible(true);}} style={styles.smallBtn}>←</button>}
-                                <img src={selectedContact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${selectedContact.name}`} style={{ width:44, height:44, borderRadius:999 }} alt={selectedContact.name} />
+                                <img src={selectedContact.photo || `https://api.dicebear.com/6.x/initials/svg?seed=${selectedContact.name}`} style={{ width:44, height:44, borderRadius:999, objectFit:"cover" }} alt={selectedContact.name} />
                                 <div><div style={{ fontWeight:700 }}>{selectedContact.name}</div><div style={{ fontSize:12, color:theme_palette.muted }}>{selectedContact.id === HA_USER.id ? "AI Assistant" : (selectedContact.online ? "Online" : `Last seen ${timeAgo(lastSeenMap[selectedContact.id])}`)}</div></div>
                             </div>
                             <div style={{ display:"flex", gap:8 }}><label style={{cursor:"pointer"}}>📎<input type="file" accept="image/*" onChange={handleImageFileDM} style={{display:"none"}}/></label></div>

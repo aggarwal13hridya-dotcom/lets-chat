@@ -70,7 +70,7 @@ export default function Favorite({
                     <img src={selectedContact.photo} style={{ width:44, height:44, borderRadius:999 }} alt="Favorites" />
                     <div>
                         <div style={{ fontWeight:700 }}>{selectedContact.name}</div>
-                        <div style={{ fontSize:12, color:palette.muted }}>Friends Only Feed</div>
+                        <div style={{ fontSize:12, color:palette.muted }}>Friends Feed</div>
                     </div>
                 </div>
             </div>

@@ -9,50 +9,75 @@ export default function SignIn({
     handleRestoreData, 
     handleStartFresh, 
     theme_palette, 
-    styles 
+    styles,
+    db,
+    dbRef,
+    set
 }) {
-    // Logic for the Welcome/Login screen
-    if (!user) {
-        return (
-            <div style={{ ...styles.app, alignItems: "center", justifyContent: "center" }}>
-                <div style={{ textAlign: "center" }}>
-                    <img 
-                        src="https://cdn-icons-png.flaticon.com/512/733/733585.png" 
-                        alt="logo" 
-                        style={{ width: 120, height: 120, marginBottom: 12, borderRadius: 18 }} 
-                    />
-                    <h1 style={{ margin: 6 }}>Let's Chat</h1>
-                    <p style={{ color: theme_palette.muted }}>Sign in to chat</p>
-                    <button 
-                        onClick={() => signInWithPopup(auth, provider)} 
-                        style={{ padding: "10px 18px", borderRadius: 12, background: theme_palette.accent, color: "#fff", border: "none", cursor: "pointer" }}
-                    >
-                        Sign in with Google
-                    </button>
-                </div>
-            </div>
-        );
-    }
 
-    // Logic for the Restore Data prompt
+    const login = async () => {
+        try {
+            const res = await signInWithPopup(auth, provider);
+            const u = res.user;
+            // Create user entry if it doesn't exist, but don't overwrite name/photo if already there
+            const userRef = dbRef(db, `users/${u.uid}`);
+            // Note: We don't set 'hasProfile' here. App.js will detect its absence and show the setup.
+            await set(userRef, {
+                email: u.email,
+                online: true,
+                lastSeen: Date.now(),
+                // Initial fallbacks
+                name: u.displayName || "New User",
+                photo: u.photoURL || ""
+            });
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    const containerStyle = {
+        ...styles.app,
+        justifyContent: "center",
+        alignItems: "center",
+        flexDirection: "column",
+        gap: 20
+    };
+
+    const cardStyle = {
+        background: theme_palette.sidebar,
+        padding: 40,
+        borderRadius: 20,
+        textAlign: "center",
+        boxShadow: "0 10px 30px rgba(0,0,0,0.1)"
+    };
+
     if (showRestorePrompt) {
         return (
-            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", color: theme_palette.text }}>
-                <div style={{ background: theme_palette.sidebar, padding: 32, borderRadius: 16, textAlign: "center", maxWidth: 400, border: `1px solid ${theme_palette.tile}` }}>
-                    <h2>Welcome Back!</h2>
-                    <p style={{ color: theme_palette.muted, margin: "15px 0 24px" }}>You signed out previously. How would you like to start this session?</p>
+            <div style={containerStyle}>
+                <div style={cardStyle}>
+                    <h2 style={{ color: theme_palette.text }}>Welcome Back!</h2>
+                    <p style={{ color: theme_palette.muted, marginBottom: 30 }}>
+                        Would you like to restore your previous chats or start fresh?
+                    </p>
                     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                         <button 
                             onClick={handleRestoreData} 
-                            style={{ background: theme_palette.accent, border: "none", padding: 12, borderRadius: 8, cursor: "pointer", fontWeight: 600, color: "#000" }}
+                            style={{ ...styles.roundBtn, width: "100%", borderRadius: 10 }}
                         >
-                            Continue Previous Account
+                            Restore My Chats
                         </button>
                         <button 
                             onClick={handleStartFresh} 
-                            style={{ background: "transparent", border: `1px solid ${theme_palette.muted}`, color: theme_palette.text, padding: 12, borderRadius: 8, cursor: "pointer" }}
+                            style={{ 
+                                background: "transparent", 
+                                border: `1px solid ${theme_palette.tile}`, 
+                                color: theme_palette.text,
+                                padding: 12,
+                                borderRadius: 10,
+                                cursor: "pointer"
+                            }}
                         >
-                            Start Fresh (Wipe Past Data)
+                            Start Fresh
                         </button>
                     </div>
                 </div>
@@ -60,5 +85,28 @@ export default function SignIn({
         );
     }
 
-    return null;
+    return (
+        <div style={containerStyle}>
+            <img src="https://cdn-icons-png.flaticon.com/512/733/733585.png" style={{ width: 100, height: 100 }} alt="logo" />
+            <div style={cardStyle}>
+                <h1 style={{ color: theme_palette.text, margin: "0 0 10px 0" }}>ChatApp</h1>
+                <p style={{ color: theme_palette.muted, marginBottom: 30 }}>Sign in to connect with friends</p>
+                <button 
+                    onClick={login} 
+                    style={{ 
+                        ...styles.roundBtn, 
+                        width: "100%", 
+                        borderRadius: 10,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: 10
+                    }}
+                >
+                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="20" alt="google" />
+                    Sign in with Google
+                </button>
+            </div>
+        </div>
+    );
 }

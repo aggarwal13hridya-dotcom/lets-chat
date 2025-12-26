@@ -7,7 +7,8 @@ const GLOBAL_CHAT_PHOTO_URL = "https://thumbs.dreamstime.com/z/unity-group-illus
 const nowTs = () => Date.now();
 
 export default function GlobalChat({ 
-    user, palette, styles, text, setText, messagesEndRef, EMOJIS, selectedContact, onCloseChat, uploadImageAndSend, hoveredMessageId, activeMenuId, handleMouseEnter, handleMouseLeave, handleDotsClick, handleTouchStart, handleTouchEnd, deleteMessage, editMessage, toggleReaction, fmtTime
+    user, palette, styles, text, setText, messagesEndRef, EMOJIS, selectedContact, onCloseChat, uploadImageAndSend, hoveredMessageId, activeMenuId, handleMouseEnter, handleMouseLeave, handleDotsClick, handleTouchStart, handleTouchEnd, deleteMessage, editMessage, toggleReaction, fmtTime,
+    friends = [] // Added friends prop to check existing connections
 }) {
     const [messages, setMessages] = useState([]);
     const [emojiOpen, setEmojiOpen] = useState(false);
@@ -78,6 +79,19 @@ export default function GlobalChat({
         else setLocalDeletedIds(prev => [...prev, msg.id]);
     };
 
+    // New logic: Add sender to user's friend list
+    async function makeFriend(msg) {
+        if (!user || !msg.sender) return;
+        const friendData = {
+            id: msg.sender,
+            name: msg.name,
+            photo: msg.photo,
+            addedAt: nowTs()
+        };
+        await set(dbRef(db, `users/${user.uid}/friends/${msg.sender}`), friendData);
+        alert(`${msg.name} added to friends!`);
+    }
+
     const chatPhoto = selectedContact.id === "GLOBAL_CHAT_ID" ? GLOBAL_CHAT_PHOTO_URL : selectedContact.photo;
 
     return (
@@ -98,6 +112,9 @@ export default function GlobalChat({
                     const isMine = m.sender === user.uid;
                     const showDots = hoveredMessageId === m.id && activeMenuId !== m.id;
                     const showMenu = activeMenuId === m.id;
+                    // Check if sender is already a friend
+                    const isAlreadyFriend = friends.some(f => f.id === m.sender);
+
                     return (
                         <div key={m.id} style={{...styles.messageRow, alignItems: isMine ? "flex-end" : "flex-start"}} onMouseEnter={() => handleMouseEnter(m.id)} onMouseLeave={handleMouseLeave} onTouchStart={() => handleTouchStart(m.id)} onTouchEnd={handleTouchEnd}>
                             <div style={{ fontWeight: 700, fontSize: 12, color: isMine ? palette.accent : palette.muted, marginBottom: 4 }}>{isMine ? "You" : m.name}</div>
@@ -106,6 +123,10 @@ export default function GlobalChat({
                                     <div style={styles.menuItem} onClick={()=>handleInternalDelete(m)}>delete message 🗑️</div>
                                     {isMine && !m.deleted && <div style={styles.menuItem} onClick={()=>editMessage(m)}>edit message ✎</div>}
                                     {!isMine && <div style={styles.menuItem} onClick={()=>toggleReaction(m, "👍")}>react message 👍</div>}
+                                    {/* New Option: Make Friend */}
+                                    {!isMine && !isAlreadyFriend && (
+                                        <div style={styles.menuItem} onClick={() => makeFriend(m)}>Make Friend 👤</div>
+                                    )}
                                 </div>
                             )}
                             <div style={isMine ? styles.bubbleMine : styles.bubbleOther}>
